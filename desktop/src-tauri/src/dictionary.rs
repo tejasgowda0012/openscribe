@@ -123,11 +123,12 @@ pub fn provider_fields(hints: &SpeechHints, provider: &str, model: &str) -> Valu
             .map_or(json!({}), |p| json!({"prompt":p})),
     }
 }
-fn bounded(patterns: &[String]) -> Result<Regex, fancy_regex::Error> {
+fn bounded(patterns: &[String]) -> Option<Regex> {
     Regex::new(&format!(
         r"(?i)(?<![\p{{L}}\p{{N}}_])(?:{})(?![\p{{L}}\p{{N}}_])",
         patterns.join("|")
     ))
+    .ok()
 }
 fn substitute(text: &str, patterns: &[String], replacement: &str) -> String {
     if patterns.is_empty() {
@@ -138,7 +139,7 @@ fn substitute(text: &str, patterns: &[String], replacement: &str) -> String {
             re.replace_all(text, |_: &fancy_regex::Captures<'_>| replacement.to_owned())
                 .into_owned()
         })
-        .unwrap_or_else(|_| text.into())
+        .unwrap_or_else(|| text.into())
 }
 pub fn apply_rules(text: &str, rules: &[CorrectionRule]) -> String {
     let mut seen = HashSet::new();
@@ -154,7 +155,7 @@ pub fn apply_rules(text: &str, rules: &[CorrectionRule]) -> String {
     if rules.is_empty() {
         return text.into();
     }
-    let Ok(re) = bounded(
+    let Some(re) = bounded(
         &rules
             .iter()
             .map(|r| regex::escape(&r.heard))
