@@ -56,4 +56,16 @@ describe("Swift daily note semantics", () => {
     expect(d.localDay(new Date(2026,9,19,23,59))).toBe("2026-10-19");
     expect(d.addCapture(grouped,capture("c"))).toHaveLength(2);
   });
+  it("limits titles by Swift characters and recognizes Unicode newlines", () => {
+    const family = "👨‍👩‍👧‍👦";
+    expect(d.displayTitle(note({cleanedText:family.repeat(65)}))).toBe(family.repeat(64));
+    expect(d.displayTitle(note({cleanedText:"first\u0085second"}))).toBe("first");
+  });
+  it("keeps captures on opposite sides of local midnight in different day notes", () => {
+    const before = new Date(2026,9,19,23,59).toISOString();
+    const after = new Date(2026,9,20,0,1).toISOString();
+    const notes = d.addCapture(d.addCapture([],capture("before","before",{createdAt:before})),capture("after","after",{createdAt:after}));
+    expect(notes).toHaveLength(2);
+    expect(notes.map(n => n.id)).toEqual(["after","before"]);
+  });
 });

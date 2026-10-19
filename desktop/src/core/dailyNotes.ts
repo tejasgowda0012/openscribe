@@ -9,8 +9,9 @@ export function displayText(note: VoiceNote): string {
 export function displayTitle(note: VoiceNote): string {
   const name = note.title.trim();
   if (name && name !== "Untitled note") return name;
-  const words = (displayText(note).split(/[\r\n\u2028\u2029]/).find(Boolean) ?? "").trim().split(/\s+/).join(" ");
-  return words ? Array.from(words).slice(0, 64).join("") : "Untitled note";
+  const words = (displayText(note).split(/[\r\n\v\f\u0085\u2028\u2029]/).find(Boolean) ?? "").trim().split(/\s+/).join(" ");
+  const characters = new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(words);
+  return words ? Array.from(characters).slice(0, 64).map(c => c.segment).join("") : "Untitled note";
 }
 export const lastCapturedAt = (note: VoiceNote) => note.captures?.at(-1)?.createdAt ?? note.createdAt;
 export const latestCapture = (note: VoiceNote) => [...visibleCaptures(note)].reverse().find(c => c.text !== "");
