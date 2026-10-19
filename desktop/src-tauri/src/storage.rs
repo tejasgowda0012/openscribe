@@ -30,7 +30,16 @@ impl Default for AppSettings {
             "calendarEnabled":false, "calendarExcludedTitles":[], "calendarAutoStart":true, "calendarMeetingsOnly":true, "calendarSummarize":true,
             "microphoneDeviceUID":"", "interactionSounds":true, "snippets":[], "appWritingTones":{}, "cleanupEnabled":true,
             "pasteIntoFocusedApp":true, "saveRawAudio":false, "showOverlayWhenIdle":false, "theme":"system",
-            "meetingMicrophone":true, "meetingSystemAudio":true, "meetingSummarize":true, "shortcuts":{}, "systemAudioDeviceId":"", "calendarSources":[]
+            "meetingMicrophone":true, "meetingSystemAudio":true, "meetingSummarize":true,
+            "shortcuts": {
+                "dictate":{"accelerator":"Ctrl+Alt+Space","display":"Ctrl Alt Space"},
+                "holdToTalk":{"accelerator":"Ctrl+Alt+H","display":"Ctrl Alt H"},
+                "meeting":{"accelerator":"Ctrl+Alt+M","display":"Ctrl Alt M"},
+                "screenshotArea":{"accelerator":"Ctrl+Alt+4","display":"Ctrl Alt 4"},
+                "screenshotWindow":{"accelerator":"Ctrl+Alt+5","display":"Ctrl Alt 5"},
+                "screenshotScreen":{"accelerator":"Ctrl+Alt+3","display":"Ctrl Alt 3"},
+                "pasteLast":{"accelerator":"Ctrl+Alt+V","display":"Ctrl Alt V"}
+            }, "systemAudioDeviceId":"", "calendarSources":[]
         })).expect("static defaults"))
     }
 }
@@ -620,6 +629,12 @@ mod tests {
         assert!(s.flag("speechHints"));
         assert_eq!(s.0["future"], 42);
         assert!(serde_json::from_value::<AppSettings>(json!({"speechHints":"bad"})).is_err());
+        let defaults = AppSettings::default();
+        let bindings: crate::shortcuts::Bindings = serde_json::from_value(defaults.0["shortcuts"].clone()).unwrap();
+        assert_eq!(bindings.len(), 7);
+        crate::shortcuts::validate(&bindings).unwrap();
+        let disabled: AppSettings = serde_json::from_value(json!({"shortcuts":{}})).unwrap();
+        assert_eq!(disabled.0["shortcuts"], json!({}));
     }
     #[test]
     fn unreadable_backup_and_blocked_writes() {

@@ -492,6 +492,11 @@ pub fn start_meeting(
     summarize_on_stop: bool,
     live_transcription: bool,
 ) -> Result<MeetingRecord, String> {
+    let activity = app.state::<crate::integration::ActivityState>();
+    let _start = activity.start_gate()?;
+    if crate::integration::dictation_busy(&app) {
+        return Err("Finish your dictation before starting a meeting.".into());
+    }
     let result = controller(&app, |c| {
         if c.active.is_some() || c.busy.is_some() {
             return Err("A meeting is already active or processing.".into());
@@ -551,7 +556,7 @@ pub fn start_meeting(
     })?;
     start_monitor(app.clone(), result.id);
     if live_transcription {
-        start_live(app, result.id)?;
+        start_live(app.clone(), result.id)?;
     }
     Ok(result)
 }
@@ -585,8 +590,39 @@ fn start_monitor(app: tauri::AppHandle, id: Id) {
     });
 }
 /// Screenshots link to a meeting only while it records or is paused.
-pub fn active_meeting_id(app: &tauri::AppHandle) -> Result<Option<Id>, String> {
-    controller(app, |c| Ok(c.active.as_ref().map(|active| active.id)))
+pub fn active_meeting_id(app: &tauri::AppHandle) -> Option<String> {
+    capture_status(app)
+        .ok()
+        .and_then(|(id, _)| id.map(|id| id.to_string()))
+}
+/// Includes stop-time uploads/summaries. Startup/pause/resume are synchronous
+/// controller transitions; a status read waits until their actual state is known.
+/// Unlike controller(), a status read never opens/migrates storage.
+pub fn capture_status(app: &tauri::AppHandle) -> Result<(Option<Id>, bool), String> {
+    let state = app.state::<MeetingState>();
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Meetings are unavailable.")?;
+    let Some(c) = inner.as_ref() else {
+        return Ok((None, false));
+    };
+    Ok(controller_capture_status(c))
+}
+fn controller_capture_status(c: &Controller) -> (Option<Id>, bool) {
+    let id = c.active.as_ref().and_then(|active| {
+        c.store
+            .records
+            .get(&active.id)
+            .filter(|record| {
+                matches!(
+                    record.status,
+                    MeetingStatus::Recording | MeetingStatus::Paused
+                )
+            })
+            .map(|record| record.id)
+    });
+    (id, c.busy.is_some())
 }
 #[tauri::command]
 pub fn pause_meeting(app: tauri::AppHandle) -> Result<(), String> {
@@ -616,29 +652,65 @@ pub fn resume_meeting(app: tauri::AppHandle) -> Result<(), String> {
 }
 #[tauri::command]
 pub async fn finish_meeting(app: tauri::AppHandle, summarize: Option<bool>) -> Result<(), String> {
-    let (id, should_process, should_summarize, cancel) = controller(&app, |c| {
-        let id = stop_sources(&app, c, true)?;
-        let active = c.active.take().expect("active meeting");
-        active.live_stop.store(true, Ordering::SeqCst);
-        if summarize == Some(false) {
-            active.live_cancel.store(true, Ordering::SeqCst);
+    let finish = prepare_finish(&app, summarize)?;
+    complete_finish(app, finish).await
+}
+struct PendingFinish {
+    id: Id,
+    process: bool,
+    summarize: bool,
+    cancel: Arc<AtomicBool>,
+}
+fn prepare_finish(
+    app: &tauri::AppHandle,
+    summarize: Option<bool>,
+) -> Result<PendingFinish, String> {
+    controller(app, |c| {
+        if c.busy.is_some() {
+            return Err("The meeting is busy. Wait for the current operation to finish.".into());
         }
-        // Reserve the controller until the current upload has checkpointed and
-        // final processing finishes. A concurrent start/delete must not race it.
-        c.busy = Some(id);
-        c.cancel = active.live_cancel;
-        let record = c.store.get(id)?;
-        let summary = summarize.unwrap_or(record.summarize_on_stop);
-        Ok((
-            id,
-            summarize != Some(false) && (summary || record.live_transcription == Some(true)),
-            summary,
-            c.cancel.clone(),
-        ))
-    })?;
+        let id = stop_sources(app, c, true)?;
+        reserve_finish(c, id, summarize)
+    })
+}
+fn reserve_finish(
+    c: &mut Controller,
+    id: Id,
+    summarize: Option<bool>,
+) -> Result<PendingFinish, String> {
+    let record = c.store.get(id)?;
+    let active = c.active.take().ok_or("No meeting is active.")?;
+    active.live_stop.store(true, Ordering::SeqCst);
+    if summarize == Some(false) {
+        active.live_cancel.store(true, Ordering::SeqCst);
+    }
+    // Reserve until the live upload has checkpointed and processing finishes.
+    c.busy = Some(id);
+    c.cancel = active.live_cancel;
+    let summary = summarize.unwrap_or(record.summarize_on_stop);
+    Ok(PendingFinish {
+        id,
+        process: summarize != Some(false) && (summary || record.live_transcription == Some(true)),
+        summarize: summary,
+        cancel: c.cancel.clone(),
+    })
+}
+/// Calendar calls this under its own mutex: reserve/stop synchronously, then
+/// schedule the async tail without block_on or any calendar state access.
+pub fn finish_in_background(app: tauri::AppHandle, summarize: Option<bool>) -> Result<(), String> {
+    let finish = prepare_finish(&app, summarize)?;
+    let id = finish.id;
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = complete_finish(app.clone(), finish).await {
+            progress(&app, id, &error);
+        }
+    });
+    Ok(())
+}
+async fn complete_finish(app: tauri::AppHandle, finish: PendingFinish) -> Result<(), String> {
     // Wait for the in-flight live upload to checkpoint before taking missing chunks.
-    if should_process {
-        run_processing(app, id, false, should_summarize, cancel).await
+    if finish.process {
+        run_processing(app, finish.id, false, finish.summarize, finish.cancel).await
     } else {
         let state = app.state::<MeetingState>();
         let _gate = state.pipeline.lock().await;
@@ -991,6 +1063,82 @@ pub fn meeting_audio_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn capture_controller(record: MeetingRecord) -> Controller {
+        let id = record.id;
+        let mut store = MeetingStore {
+            root: PathBuf::new(),
+            records: BTreeMap::new(),
+            errors: vec![],
+        };
+        store.records.insert(id, record);
+        Controller {
+            store,
+            active: Some(ActiveMeeting {
+                id,
+                origin: Instant::now(),
+                tracks: vec![],
+                failure: Arc::new(Mutex::new(None)),
+                meter: Arc::new(Mutex::new([0.0; 2])),
+                live_stop: Arc::new(AtomicBool::new(false)),
+                live_cancel: Arc::new(AtomicBool::new(false)),
+                live_running: Arc::new(AtomicBool::new(false)),
+            }),
+            busy: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+    #[test]
+    fn capture_status_exposes_only_recording_or_paused_actual_id_and_processing_busy() {
+        let record = MeetingRecord {
+            status: MeetingStatus::Recording,
+            ..Default::default()
+        };
+        let id = record.id;
+        let mut controller = capture_controller(record);
+        assert_eq!(controller_capture_status(&controller), (Some(id), false));
+        for status in [
+            MeetingStatus::Paused,
+            MeetingStatus::Saved,
+            MeetingStatus::Transcribing,
+            MeetingStatus::Ready,
+        ] {
+            controller.store.records.get_mut(&id).unwrap().status = status;
+            assert_eq!(
+                controller_capture_status(&controller),
+                ((status == MeetingStatus::Paused).then_some(id), false)
+            );
+        }
+        controller.active = None;
+        controller.busy = Some(id);
+        assert_eq!(controller_capture_status(&controller), (None, true));
+    }
+    #[test]
+    fn synchronous_calendar_finish_reserves_actual_id_and_honors_all_stop_modes() {
+        for (summarize, preferred, live, process, summary, cancelled) in [
+            (None, true, false, true, true, false),
+            (None, false, true, true, false, false),
+            (None, false, false, false, false, false),
+            (Some(false), true, true, false, false, true),
+            (Some(true), false, false, true, true, false),
+        ] {
+            let record = MeetingRecord {
+                status: MeetingStatus::Saved,
+                summarize_on_stop: preferred,
+                live_transcription: Some(live),
+                ..Default::default()
+            };
+            let id = record.id;
+            let mut controller = capture_controller(record);
+            let stopped = controller.active.as_ref().unwrap().live_stop.clone();
+            let pending = reserve_finish(&mut controller, id, summarize).unwrap();
+            assert_eq!(pending.id, id);
+            assert_eq!(pending.process, process);
+            assert_eq!(pending.summarize, summary);
+            assert!(stopped.load(Ordering::SeqCst));
+            assert_eq!(pending.cancel.load(Ordering::SeqCst), cancelled);
+            assert_eq!(controller_capture_status(&controller), (None, true));
+        }
+    }
     #[test]
     fn silence_checkpoints_once_and_summary_threshold_requires_confirmation() {
         let mut record = MeetingRecord::default();

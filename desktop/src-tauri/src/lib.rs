@@ -1,8 +1,11 @@
+#![recursion_limit = "256"]
+
 pub mod apple_time;
 mod audio;
 pub mod calendar;
 mod credentials;
 pub mod dictionary;
+pub mod integration;
 pub mod meeting_audio;
 pub mod meetings;
 mod migrate;
@@ -12,6 +15,7 @@ pub mod provider;
 pub mod shortcuts;
 pub mod storage;
 pub mod summary;
+mod tray;
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -35,12 +39,19 @@ fn start_recording(
     state: tauri::State<audio::RecorderState>,
     device_id: Option<String>,
 ) -> Result<String, String> {
+    let activity = app.state::<integration::ActivityState>();
+    let _start = activity.start_gate()?;
+    let (id, busy) = meetings::capture_status(&app)?;
+    if id.is_some() || busy {
+        return Err("Finish the meeting before starting dictation.".into());
+    }
     let root = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("Recordings");
-    audio::start(&state, device_id, root, app).map(|path| path.to_string_lossy().to_string())
+    audio::start(&state, device_id, root, app.clone())
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -87,19 +98,34 @@ fn remove_credential(account: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn transcribe_recording(
+    app: tauri::AppHandle,
     path: String,
     config: provider::ProviderConfig,
     hints: Option<provider::SpeechHints>,
 ) -> Result<provider::ProviderResult, String> {
+    let _work = integration::dictation_work(&app)?;
+    let hints = match hints {
+        Some(hints) => Some(hints),
+        None => storage::with_profile(&app, &app.state::<storage::ProfileState>(), |s| {
+            // The command's provider/model may come from a recovery job snapshot.
+            Ok(Some(integration::hints_for_provider(
+                &s.settings,
+                &config.provider,
+                &config.model,
+            )))
+        })?,
+    };
     provider::transcribe(&PathBuf::from(path), &config, hints.as_ref()).await
 }
 
 #[tauri::command]
 async fn clean_transcript(
+    app: tauri::AppHandle,
     text: String,
     config: provider::ProviderConfig,
     instruction: String,
 ) -> Result<provider::ProviderResult, String> {
+    let _work = integration::dictation_work(&app)?;
     provider::clean(&text, &config, &instruction).await
 }
 
@@ -116,17 +142,28 @@ pub fn run() {
         .manage(meetings::MeetingState::default())
         .manage(shortcuts::ShortcutManager::default())
         .manage(calendar::CalendarState::default())
+        .manage(integration::ActivityState::default())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            integration::install(app.handle()).map_err(std::io::Error::other)?;
+            tray::install(app.handle())?;
             calendar::boot(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.emit("openscribe-ready", ());
             }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if matches!(window.label(), "main" | "meeting-notes") {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             list_audio_inputs,
@@ -161,7 +198,8 @@ pub fn run() {
             meetings::delete_meeting,
             meetings::export_meeting_markdown,
             meetings::meeting_audio_path,
-            dictionary::apply_dictionary,
+            integration::apply_dictionary,
+            integration::set_dictation_busy,
             shortcuts::register_shortcuts,
             shortcuts::suspend_shortcuts,
             calendar::calendar_refresh,

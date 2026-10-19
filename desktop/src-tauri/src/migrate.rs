@@ -89,10 +89,17 @@ pub fn legacy(root: &Path) -> Result<(), String> {
         map.insert("theme".into(), json!("light"));
     }
     if let Some(shortcut) = map.remove("shortcut") {
-        map.insert(
-            "shortcuts".into(),
-            json!({"dictate":{"accelerator":shortcut,"display":shortcut}}),
-        );
+        let bindings = json!({"dictate":{"accelerator":shortcut,"display":shortcut}});
+        let valid = serde_json::from_value::<crate::shortcuts::Bindings>(bindings.clone())
+            .is_ok_and(|bindings| crate::shortcuts::validate(&bindings).is_ok());
+        if valid {
+            map.insert("shortcuts".into(), bindings);
+        } else {
+            // v0.4 shipped Alt+Space, which Windows reserves for its window menu.
+            // Keep the original preference alongside the untouched legacy backup.
+            map.insert("legacyShortcut".into(), shortcut);
+            map.insert("shortcuts".into(), AppSettings::default().0["shortcuts"].clone());
+        }
     }
     let settings: AppSettings = serde_json::from_value(json!(map))
         .map_err(|e| format!("Could not migrate legacy settings: {e}"))?;
@@ -166,6 +173,17 @@ pub fn legacy(root: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reserved_legacy_shortcut_uses_windows_defaults_without_losing_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = r#"{"state":{"settings":{"shortcut":"Alt+Space"}}}"#;
+        fs::write(dir.path().join("openscribe.json"), legacy).unwrap();
+        let store = crate::storage::ProfileStore::open(dir.path().into());
+        let settings = store.profile().settings;
+        assert_eq!(settings.0["legacyShortcut"], "Alt+Space");
+        assert_eq!(settings.0["shortcuts"]["dictate"]["accelerator"], "Ctrl+Alt+Space");
+        assert_eq!(fs::read_to_string(dir.path().join("openscribe.json")).unwrap(), legacy);
+    }
     #[test]
     fn failed_legacy_backup_blocks_profile_writes_and_preserves_source() {
         let dir = tempfile::tempdir().unwrap();

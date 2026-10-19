@@ -28,6 +28,15 @@ pub struct ActiveRecording {
 #[derive(Default)]
 pub struct RecorderState(pub Mutex<Option<ActiveRecording>>);
 
+/// Contended startup/finalization is busy as well as an established stream.
+pub fn is_busy(state: &RecorderState) -> bool {
+    state
+        .0
+        .try_lock()
+        .map(|active| active.is_some())
+        .unwrap_or(true)
+}
+
 pub fn inputs() -> Result<Vec<AudioInput>, String> {
     let host = cpal::default_host();
     let devices = host.input_devices().map_err(|error| error.to_string())?;
@@ -96,10 +105,11 @@ pub fn start(
 }
 
 pub fn stop(state: &RecorderState) -> Result<(PathBuf, f64), String> {
-    let active = state
+    let mut guard = state
         .0
         .lock()
-        .map_err(|_| "Recorder is unavailable".to_string())?
+        .map_err(|_| "Recorder is unavailable".to_string())?;
+    let active = guard
         .take()
         .ok_or_else(|| "No recording is active.".to_string())?;
     let duration = active.started.elapsed().as_secs_f64();
@@ -109,6 +119,58 @@ pub fn stop(state: &RecorderState) -> Result<(PathBuf, f64), String> {
         .join()
         .map_err(|_| "The recorder stopped unexpectedly.".to_string())??;
     Ok((active.path, duration))
+}
+
+/// Build both real WASAPI clients without playing streams or writing audio.
+/// CPAL initializes IAudioClient here, so privacy/device errors fail readiness.
+/// Classic desktop WASAPI does not request consent; users enable it in Settings.
+#[cfg(windows)]
+pub fn calendar_capture_ready(microphone: &str, system_audio: &str) -> Result<(), String> {
+    let host = cpal::default_host();
+    let input = if microphone.is_empty() {
+        host.default_input_device()
+            .ok_or("No microphone was found.")?
+    } else {
+        host.input_devices()
+            .map_err(|e| e.to_string())?
+            .find(|d| d.name().ok().as_deref() == Some(microphone))
+            .ok_or("The selected microphone is no longer available.")?
+    };
+    let output = if system_audio.is_empty() {
+        host.default_output_device()
+            .ok_or("No system audio output device was found.")?
+    } else {
+        host.output_devices()
+            .map_err(|e| e.to_string())?
+            .find(|d| d.name().ok().as_deref() == Some(system_audio))
+            .ok_or("The selected system audio output is no longer available.")?
+    };
+    let input_config = input.default_input_config().map_err(|e| e.to_string())?;
+    let output_config = output.default_output_config().map_err(|e| e.to_string())?;
+    fn probe(
+        device: &cpal::Device,
+        config: cpal::SupportedStreamConfig,
+    ) -> Result<cpal::Stream, String> {
+        if !matches!(
+            config.sample_format(),
+            cpal::SampleFormat::F32 | cpal::SampleFormat::I16 | cpal::SampleFormat::U16
+        ) {
+            return Err(format!(
+                "Unsupported audio sample format: {:?}",
+                config.sample_format()
+            ));
+        }
+        device.build_input_stream_raw(&config.config(), config.sample_format(), |_, _| {}, |_| {}, None)
+            .map_err(|e| format!("Audio access is not ready. Check Windows microphone privacy and audio devices: {e}"))
+    }
+    let _microphone = probe(&input, input_config)?;
+    // An input stream on a WASAPI render endpoint is real loopback capture.
+    let _system_audio = probe(&output, output_config)?;
+    Ok(())
+}
+#[cfg(not(windows))]
+pub fn calendar_capture_ready(_: &str, _: &str) -> Result<(), String> {
+    Err("Automatic system audio capture is not supported on this platform.".into())
 }
 
 fn record(
@@ -232,4 +294,18 @@ where
             None,
         )
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn calendar_treats_contended_recorder_start_and_stop_as_busy() {
+        let recorder = RecorderState::default();
+        assert!(!is_busy(&recorder));
+        let transition = recorder.0.lock().unwrap();
+        assert!(is_busy(&recorder));
+        drop(transition);
+        assert!(!is_busy(&recorder));
+    }
 }

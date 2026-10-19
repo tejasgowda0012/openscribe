@@ -20,12 +20,12 @@ pub struct ProviderResult {
 }
 
 /// Constructed by Codex-B's dictionary module; transport only applies these hints.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct SpeechHints {
     pub prompt: Option<String>,
     pub terms: Vec<String>,
 }
-/// Install dictionary::hints::for_settings during app setup.
+/// Installed by integration::install during app setup.
 pub static SPEECH_HINT_FACTORY: std::sync::OnceLock<
     fn(&crate::storage::AppSettings) -> SpeechHints,
 > = std::sync::OnceLock::new();

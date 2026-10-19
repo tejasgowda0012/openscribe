@@ -1,4 +1,5 @@
 //! SmartDictionary.swift parity. Classifier failures deliberately leave local results intact.
+pub use crate::provider::SpeechHints;
 use fancy_regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -37,12 +38,6 @@ impl Default for DictionarySettings {
             language_model: "openai/gpt-5.6-luna".into(),
         }
     }
-}
-// TEMP: moves to provider.rs on integration
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SpeechHints {
-    pub prompt: Option<String>,
-    pub terms: Vec<String>,
 }
 pub fn terms(settings: &DictionarySettings) -> Vec<String> {
     if !settings.speech_hints {
@@ -406,19 +401,11 @@ async fn classify(text: &str, settings: &DictionarySettings) -> Option<Vec<Edit>
         .ok()?;
     Some(parse_edits(value.pointer(path)?.as_str()?))
 }
-#[tauri::command]
 pub async fn apply_dictionary(
     text: String,
     settings: DictionarySettings,
 ) -> Result<Outcome, String> {
-    let local = {
-        let checker = os_spellcheck::SpellChecker::new();
-        local_pass(
-            &apply_rules(&text, &settings.correction_rules),
-            &settings.custom_vocabulary,
-            |word| checker.check(&word.to_lowercase()).is_empty(),
-        )
-    };
+    let local = apply_local(&text, &settings);
     let edits = if settings.spoken_corrections && might_contain_correction(&local) {
         tokio::time::timeout(
             std::time::Duration::from_secs(8),
@@ -432,6 +419,16 @@ pub async fn apply_dictionary(
         vec![]
     };
     Ok(classified_outcome(&local, &edits, &settings))
+}
+/// Swift's meeting pass is synchronous and never classifies spoken corrections.
+/// Keep the native spellchecker entirely on this thread, before any await.
+pub fn apply_local(text: &str, settings: &DictionarySettings) -> String {
+    let checker = os_spellcheck::SpellChecker::new();
+    local_pass(
+        &apply_rules(text, &settings.correction_rules),
+        &settings.custom_vocabulary,
+        |word| checker.check(&word.to_lowercase()).is_empty(),
+    )
 }
 fn classified_outcome(local: &str, edits: &[Edit], settings: &DictionarySettings) -> Outcome {
     let mut outcome = apply_edits(local, edits);
