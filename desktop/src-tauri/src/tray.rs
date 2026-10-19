@@ -10,13 +10,15 @@ pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
         .build()?;
     let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
         let mut rgba = vec![0_u8; 16 * 16 * 4];
-        for y in 2..14 { for x in 2..14 {
-            let pixel = (y * 16 + x) * 4;
-            rgba[pixel..pixel + 4].copy_from_slice(&[37, 99, 235, 255]);
-            if (7..9).contains(&x) && (4..12).contains(&y) {
-                rgba[pixel..pixel + 4].copy_from_slice(&[255, 255, 255, 255]);
+        for y in 2..14 {
+            for x in 2..14 {
+                let pixel = (y * 16 + x) * 4;
+                rgba[pixel..pixel + 4].copy_from_slice(&[37, 99, 235, 255]);
+                if (7..9).contains(&x) && (4..12).contains(&y) {
+                    rgba[pixel..pixel + 4].copy_from_slice(&[255, 255, 255, 255]);
+                }
             }
-        }}
+        }
         tauri::image::Image::new_owned(rgba, 16, 16)
     });
     TrayIconBuilder::with_id("openscribe")
@@ -26,21 +28,34 @@ pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "workspace" | "flowbar" => {
-                let label = if event.id().as_ref() == "workspace" { "main" } else { "flowbar" };
+                let label = if event.id().as_ref() == "workspace" {
+                    "main"
+                } else {
+                    "flowbar"
+                };
                 if let Some(window) = app.get_webview_window(label) {
                     let _ = window.show();
-                    if label == "main" { let _ = window.set_focus(); }
+                    if label == "main" {
+                        let _ = window.set_focus();
+                    }
                 }
             }
             "quit" => {
                 let meeting_busy = crate::meetings::capture_status(app)
-                    .map(|(active, busy)| active.is_some() || busy).unwrap_or(true);
+                    .map(|(active, busy)| active.is_some() || busy)
+                    .unwrap_or(true);
                 if crate::integration::dictation_busy(app) || meeting_busy {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show(); let _ = window.set_focus();
+                        let _ = window.show();
+                        let _ = window.set_focus();
                     }
-                    let _ = app.emit("app://error", "Finish the active capture or processing before quitting OpenScribe.");
-                } else { app.exit(0); }
+                    let _ = app.emit(
+                        "app://error",
+                        "Finish the active capture or processing before quitting OpenScribe.",
+                    );
+                } else {
+                    app.exit(0);
+                }
             }
             _ => {}
         })

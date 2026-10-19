@@ -98,7 +98,10 @@ pub fn legacy(root: &Path) -> Result<(), String> {
             // v0.4 shipped Alt+Space, which Windows reserves for its window menu.
             // Keep the original preference alongside the untouched legacy backup.
             map.insert("legacyShortcut".into(), shortcut);
-            map.insert("shortcuts".into(), AppSettings::default().0["shortcuts"].clone());
+            map.insert(
+                "shortcuts".into(),
+                AppSettings::default().0["shortcuts"].clone(),
+            );
         }
     }
     let settings: AppSettings = serde_json::from_value(json!(map))
@@ -181,8 +184,14 @@ mod tests {
         let store = crate::storage::ProfileStore::open(dir.path().into());
         let settings = store.profile().settings;
         assert_eq!(settings.0["legacyShortcut"], "Alt+Space");
-        assert_eq!(settings.0["shortcuts"]["dictate"]["accelerator"], "Ctrl+Alt+Space");
-        assert_eq!(fs::read_to_string(dir.path().join("openscribe.json")).unwrap(), legacy);
+        assert_eq!(
+            settings.0["shortcuts"]["dictate"]["accelerator"],
+            "Ctrl+Alt+Space"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("openscribe.json")).unwrap(),
+            legacy
+        );
     }
     #[test]
     fn failed_legacy_backup_blocks_profile_writes_and_preserves_source() {

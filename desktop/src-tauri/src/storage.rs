@@ -630,7 +630,8 @@ mod tests {
         assert_eq!(s.0["future"], 42);
         assert!(serde_json::from_value::<AppSettings>(json!({"speechHints":"bad"})).is_err());
         let defaults = AppSettings::default();
-        let bindings: crate::shortcuts::Bindings = serde_json::from_value(defaults.0["shortcuts"].clone()).unwrap();
+        let bindings: crate::shortcuts::Bindings =
+            serde_json::from_value(defaults.0["shortcuts"].clone()).unwrap();
         assert_eq!(bindings.len(), 7);
         crate::shortcuts::validate(&bindings).unwrap();
         let disabled: AppSettings = serde_json::from_value(json!({"shortcuts":{}})).unwrap();
