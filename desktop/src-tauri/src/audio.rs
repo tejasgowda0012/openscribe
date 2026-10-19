@@ -8,6 +8,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use tauri::Emitter;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +52,7 @@ pub fn start(
     state: &RecorderState,
     device_id: Option<String>,
     directory: PathBuf,
+    app: tauri::AppHandle,
 ) -> Result<PathBuf, String> {
     let mut guard = state
         .0
@@ -60,11 +62,17 @@ pub fn start(
         return Err("A recording is already active.".into());
     }
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let path = directory.join(format!("{}.wav", uuid::Uuid::new_v4()));
+    let path = directory.join(format!("{}.wav", crate::apple_time::Id::default()));
     let thread_path = path.clone();
     let (stop_tx, stop_rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
-    let thread = thread::spawn(move || record(thread_path, device_id, stop_rx, ready_tx));
+    let thread = thread::spawn(move || {
+        let result = record(thread_path, device_id, stop_rx, &ready_tx, app);
+        if let Err(error) = &result {
+            let _ = ready_tx.send(Err(error.clone()));
+        }
+        result
+    });
     match ready_rx.recv_timeout(Duration::from_secs(5)) {
         Ok(Ok(())) => {
             *guard = Some(ActiveRecording {
@@ -79,7 +87,11 @@ pub fn start(
             let _ = thread.join();
             Err(error)
         }
-        Err(_) => Err("The audio device did not start in time.".into()),
+        Err(_) => {
+            let _ = stop_tx.send(());
+            let _ = thread.join();
+            Err("The audio device did not start in time.".into())
+        }
     }
 }
 
@@ -103,7 +115,8 @@ fn record(
     path: PathBuf,
     device_id: Option<String>,
     stop: mpsc::Receiver<()>,
-    ready: mpsc::Sender<Result<(), String>>,
+    ready: &mpsc::Sender<Result<(), String>>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let host = cpal::default_host();
     let device = if let Some(id) = device_id.filter(|value| !value.is_empty()) {
@@ -133,16 +146,29 @@ fn record(
             *value = Some(error.to_string());
         }
     };
+    let level = Arc::new(Mutex::new(0.0_f32));
     let config = supported.config();
     let stream = match supported.sample_format() {
-        cpal::SampleFormat::F32 => build_stream::<f32>(&device, &config, writer.clone(), on_error),
-        cpal::SampleFormat::I16 => build_stream::<i16>(&device, &config, writer.clone(), on_error),
-        cpal::SampleFormat::U16 => build_stream::<u16>(&device, &config, writer.clone(), on_error),
+        cpal::SampleFormat::F32 => {
+            build_stream::<f32>(&device, &config, writer.clone(), on_error, level.clone())
+        }
+        cpal::SampleFormat::I16 => {
+            build_stream::<i16>(&device, &config, writer.clone(), on_error, level.clone())
+        }
+        cpal::SampleFormat::U16 => {
+            build_stream::<u16>(&device, &config, writer.clone(), on_error, level.clone())
+        }
         format => Err(format!("Unsupported audio sample format: {format:?}")),
     }?;
     stream.play().map_err(|error| error.to_string())?;
     let _ = ready.send(Ok(()));
-    let _ = stop.recv();
+    while let Err(mpsc::RecvTimeoutError::Timeout) = stop.recv_timeout(Duration::from_millis(50)) {
+        let value = level.lock().map(|v| *v).unwrap_or_default();
+        let _ = app.emit("dictation://level", serde_json::json!({"level":value}));
+        if errors.lock().ok().is_some_and(|e| e.is_some()) {
+            break;
+        }
+    }
     drop(stream);
     if let Some(writer) = writer
         .lock()
@@ -181,6 +207,7 @@ fn build_stream<T>(
     config: &cpal::StreamConfig,
     writer: Arc<Mutex<Option<hound::WavWriter<BufWriter<File>>>>>,
     on_error: impl FnMut(cpal::StreamError) + Send + 'static,
+    level: Arc<Mutex<f32>>,
 ) -> Result<cpal::Stream, String>
 where
     T: cpal::SizedSample + ToI16,
@@ -189,6 +216,10 @@ where
         .build_input_stream(
             config,
             move |samples: &[T], _| {
+                let pcm: Vec<i16> = samples.iter().map(|s| (*s).to_i16()).collect();
+                if let Ok(mut meter) = level.lock() {
+                    *meter = crate::meeting_audio::rms(&pcm);
+                }
                 if let Ok(mut guard) = writer.lock() {
                     if let Some(writer) = guard.as_mut() {
                         for sample in samples {
