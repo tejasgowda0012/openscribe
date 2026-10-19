@@ -151,8 +151,9 @@ its decision. Expansion is bounded to 4096 results and subscriptions to 8 MB.
 
 ICS-specific limits (EventKit supplies these details natively on macOS):
 
-- IANA TZIDs and floating/local dates are supported, including DST and
-  X-WR-TIMEZONE. Arbitrary VTIMEZONE definitions, Windows timezone names and
+- IANA TZIDs, standard Windows TZIDs (via windows-timezones' CLDR mapping) and
+  floating/local dates are supported, including DST and X-WR-TIMEZONE.
+  Arbitrary VTIMEZONE definitions and
   RANGE=THISANDFUTURE overrides return explicit errors rather than wrong times.
 - ICS lacks EventKit's isCurrentUser. When an exported calendar name/ID identifies
   its owner email, only that attendee's decline excludes the event. Otherwise
@@ -177,6 +178,7 @@ regex = "1"
 fancy-regex = "0.16"
 os-spellcheck = "0.2"
 chrono-tz = "0.10"
+windows-timezones = { version = "0.5", default-features = false, features = ["std"] }
 ```
 
 Tests exercise Swift dictionary fixtures and prompt equality, request encoding

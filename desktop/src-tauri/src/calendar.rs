@@ -150,9 +150,15 @@ fn timezone(p: &Property, fallback: Option<&str>) -> Result<Tz, String> {
                 .unwrap_or(zone)
                 .parse::<chrono_tz::Tz>()
         })
+        .or_else(|_| {
+            zone.parse::<windows_timezones::WindowsTimezone>()
+                .ok()
+                .and_then(|tz| tz.tzdb_id().parse::<chrono_tz::Tz>().ok())
+                .ok_or(())
+        })
         .map(Tz::from)
         .map_err(|_| {
-            format!("Unsupported calendar time zone: {zone}. Use an ICS feed with IANA time zones.")
+            format!("Unsupported calendar time zone: {zone}. Use an ICS feed with IANA or standard Windows time zones.")
         })
 }
 fn date(p: &Property, fallback: Option<&str>) -> Result<DateTime<Tz>, String> {
@@ -1135,6 +1141,24 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(events[1].start - events[0].start, Duration::hours(25));
         assert!(parse(&text.replace("America/New_York", "Unknown/Zone")).is_err());
+    }
+    #[test]
+    fn outlook_windows_timezone_ids_map_through_cldr_and_keep_dst() {
+        let india = parse(concat!(
+            "BEGIN:VEVENT\r\nUID:outlook\r\nDTSTART;TZID=India Standard Time:20261019T153000\r\n",
+            "DTEND;TZID=India Standard Time:20261019T163000\r\nEND:VEVENT"
+        ))
+        .unwrap();
+        assert_eq!(india[0].start, now());
+        let text = concat!(
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:outlook-dst\r\n",
+            "DTSTART;TZID=Eastern Standard Time:20261031T100000\r\n",
+            "DTEND;TZID=Eastern Standard Time:20261031T110000\r\n",
+            "RRULE:FREQ=DAILY;COUNT=3\r\nEND:VEVENT\r\nEND:VCALENDAR"
+        );
+        let events = parse_ics(text, &source(), now(), now() + Duration::days(20)).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[1].start - events[0].start, Duration::hours(25));
     }
     #[test]
     fn moved_override_inherits_series_duration_and_metadata() {
