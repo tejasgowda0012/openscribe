@@ -1,7 +1,14 @@
 mod audio;
 mod credentials;
 mod platform;
-mod provider;
+pub mod provider;
+pub mod apple_time;
+pub mod storage;
+pub mod notes;
+pub mod meetings;
+pub mod meeting_audio;
+pub mod summary;
+mod migrate;
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -30,7 +37,7 @@ fn start_recording(
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("Recordings");
-    audio::start(&state, device_id, root).map(|path| path.to_string_lossy().to_string())
+    audio::start(&state, device_id, root, app).map(|path| path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -79,8 +86,9 @@ fn remove_credential(account: String) -> Result<(), String> {
 async fn transcribe_recording(
     path: String,
     config: provider::ProviderConfig,
+    hints: Option<provider::SpeechHints>,
 ) -> Result<provider::ProviderResult, String> {
-    provider::transcribe(&PathBuf::from(path), &config).await
+    provider::transcribe(&PathBuf::from(path), &config, hints.as_ref()).await
 }
 
 #[tauri::command]
@@ -101,6 +109,8 @@ fn paste_keystroke() -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(audio::RecorderState::default())
+        .manage(storage::ProfileState::default())
+        .manage(meetings::MeetingState::default())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -122,7 +132,29 @@ pub fn run() {
             remove_credential,
             transcribe_recording,
             clean_transcript,
-            paste_keystroke
+            paste_keystroke,
+            storage::load_profile,
+            storage::save_settings,
+            storage::save_note,
+            storage::delete_note,
+            storage::add_capture,
+            storage::update_capture,
+            storage::remove_capture,
+            storage::attachment_path,
+            meetings::list_meetings,
+            meetings::start_meeting,
+            meetings::pause_meeting,
+            meetings::resume_meeting,
+            meetings::finish_meeting,
+            meetings::process_meeting,
+            meetings::summarize_short_meeting,
+            meetings::skip_summary,
+            meetings::retry_live_transcription,
+            meetings::cancel_processing,
+            meetings::update_meeting,
+            meetings::delete_meeting,
+            meetings::export_meeting_markdown,
+            meetings::meeting_audio_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running OpenScribe");
