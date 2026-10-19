@@ -50,13 +50,13 @@ struct LegacyState {
 struct LegacyStore {
     state: LegacyState,
 }
+fn legacy_datetime(raw: &str) -> Result<chrono::DateTime<chrono::FixedOffset>, String> {
+    chrono::DateTime::parse_from_rfc3339(raw).map_err(|_| {
+        "The legacy profile has an unreadable date. The original profile has been preserved.".into()
+    })
+}
 fn legacy_date(raw: &str) -> Result<NoteDate, String> {
-    chrono::DateTime::parse_from_rfc3339(raw)
-        .map(|d| NoteDate(d.timestamp()))
-        .map_err(|_| {
-            "The legacy profile has an unreadable date. The original profile has been preserved."
-                .into()
-        })
+    legacy_datetime(raw).map(|date| NoteDate(date.timestamp()))
 }
 pub fn legacy(root: &Path) -> Result<(), String> {
     let source = root.join("openscribe.json");
@@ -127,7 +127,8 @@ pub fn legacy(root: &Path) -> Result<(), String> {
         }];
         meetings.push(MeetingRecord {
             id: m.id,
-            created_at: legacy_date(&m.created_at)?.apple(),
+            created_at: legacy_datetime(&m.created_at)?.timestamp_millis() as f64 / 1000.0
+                - crate::apple_time::APPLE_EPOCH,
             title: m.title,
             duration: m.duration,
             status: MeetingStatus::Ready,
@@ -204,6 +205,12 @@ mod tests {
             .join("Meetings/C621E1F8-C36C-495A-93FC-0C247A3E6E5F/meeting.json");
         let meeting: MeetingRecord = crate::storage::read_json(&path).unwrap();
         assert_eq!(meeting.status, MeetingStatus::Ready);
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-10-19T10:58:15.321Z")
+            .unwrap()
+            .timestamp_millis() as f64
+            / 1000.0
+            - crate::apple_time::APPLE_EPOCH;
+        assert_eq!(meeting.created_at, expected);
         assert_eq!(meeting.segments[0].id, "legacy/transcript");
         assert!(meeting.user_notes.unwrap().contains("## Previous summary"));
         assert_eq!(meeting.extra["audioPath"], "untouched.wav");

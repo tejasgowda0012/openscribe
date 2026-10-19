@@ -361,6 +361,28 @@ impl ProfileStore {
         self.save_notes(notes)?;
         Ok(note)
     }
+    pub fn link_meeting(&mut self, record: &crate::meetings::MeetingRecord) -> Result<(), String> {
+        if self
+            .notes
+            .iter()
+            .flat_map(|n| n.captures.iter().flatten())
+            .any(|c| {
+                c.meeting_id == Some(record.id) && c.entry_kind() == notes::CaptureKind::Meeting
+            })
+        {
+            return Ok(());
+        }
+        self.add_capture(NoteCapture {
+            created_at: crate::apple_time::NoteDate(
+                (record.created_at + crate::apple_time::APPLE_EPOCH).floor() as i64,
+            ),
+            title: record.title.clone(),
+            kind: Some(notes::CaptureKind::Meeting),
+            meeting_id: Some(record.id),
+            ..NoteCapture::default()
+        })?;
+        Ok(())
+    }
     pub fn remove_meeting_entries(&mut self, id: Id) -> Result<(), String> {
         let mut notes = self.notes.clone();
         for note in &mut notes {
@@ -567,6 +589,29 @@ pub fn attachment_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn meetings_link_once_into_daily_notes_and_deletion_keeps_screenshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = ProfileStore::open(dir.path().into());
+        let meeting = crate::meetings::MeetingRecord::default();
+        store.link_meeting(&meeting).unwrap();
+        store.link_meeting(&meeting).unwrap();
+        assert_eq!(store.notes[0].captures.as_ref().unwrap().len(), 1);
+        let screenshot = NoteCapture {
+            created_at: store.notes[0].created_at,
+            kind: Some(notes::CaptureKind::Screenshot),
+            meeting_id: Some(meeting.id),
+            attachment: Some(format!("Screenshot-{}.png", Id::default())),
+            ..NoteCapture::default()
+        };
+        store.add_capture(screenshot.clone()).unwrap();
+        store.remove_meeting_entries(meeting.id).unwrap();
+        let captures = store.notes[0].captures.as_ref().unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].id, screenshot.id);
+        assert_eq!(captures[0].meeting_id, None);
+        assert_eq!(captures[0].attachment, screenshot.attachment);
+    }
     #[test]
     fn defaults_and_snapshot_and_unknown_keys() {
         let s: AppSettings =

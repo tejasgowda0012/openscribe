@@ -521,6 +521,14 @@ pub fn start_meeting(
             ..MeetingRecord::default()
         };
         c.store.save(record.clone())?;
+        if let Err(error) = storage::with_profile(&app, &app.state::<ProfileState>(), |s| {
+            s.link_meeting(&record)
+        }) {
+            record.status = MeetingStatus::Failed;
+            record.last_error = Some(error.clone());
+            save(&app, c, record)?;
+            return Err(error);
+        }
         c.active = Some(ActiveMeeting {
             id: record.id,
             origin: Instant::now(),
@@ -575,6 +583,10 @@ fn start_monitor(app: tauri::AppHandle, id: Id) {
             }
         }
     });
+}
+/// Screenshots link to a meeting only while it records or is paused.
+pub fn active_meeting_id(app: &tauri::AppHandle) -> Result<Option<Id>, String> {
+    controller(app, |c| Ok(c.active.as_ref().map(|active| active.id)))
 }
 #[tauri::command]
 pub fn pause_meeting(app: tauri::AppHandle) -> Result<(), String> {
@@ -1006,6 +1018,7 @@ mod tests {
         assert_eq!(cancelled(&token, async { Ok(42) }).await.unwrap(), 42);
         let trigger = token.clone();
         let cancel = async move {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             trigger.store(true, Ordering::SeqCst);
         };
         let work = cancelled::<()>(&token, std::future::pending());
@@ -1096,11 +1109,33 @@ mod tests {
         };
         let id = record.id;
         store.save(record).unwrap();
+        let part = meeting_audio::part_directory(&store.directory(id));
+        let mut writer =
+            meeting_audio::ChunkWriter::new(part.join("microphone"), 1, 10, 45.0).unwrap();
+        writer.append(&[1; 10]).unwrap();
+        writer.finish().unwrap();
+        fs::write(part.join("microphone/chunk-00001.wav"), b"corrupt").unwrap();
         let store = MeetingStore::open(dir.path().into());
         let r = store.get(id).unwrap();
         assert_eq!(r.status, MeetingStatus::Interrupted);
         assert_eq!(r.segments[0].text, "Already done");
         assert!(r.last_error.is_some());
+        assert_eq!(r.duration, 46.0);
+        assert!(r
+            .recovery_notice
+            .as_deref()
+            .unwrap()
+            .contains("1 audio section(s)"));
+        assert_eq!(
+            meeting_audio::inventory(&store.directory(id), false)
+                .unwrap()
+                .chunks
+                .len(),
+            1
+        );
+        let persisted: MeetingRecord =
+            storage::read_json(&store.directory(id).join("meeting.json")).unwrap();
+        assert_eq!(persisted.status, MeetingStatus::Interrupted);
         assert!(store.audio_path(id, "../outside.wav").is_err());
         assert!(store.audio_path(id, "meeting.json").is_err());
     }
