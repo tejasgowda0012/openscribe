@@ -72,7 +72,7 @@ export interface MeetingSettings {
   languageModel?: string;
   customVocabulary?: string[];
   correctionRules?: Array<{ id?: string; heard: string; replacement: string }>;
-  speechHints?: string[];
+  speechHints?: boolean;
   microphoneDeviceUID?: string;
 }
 
@@ -146,6 +146,12 @@ export interface CalendarEvent {
   location?: string;
   url?: string;
   isMeeting?: boolean;
+  calendarID: string;
+  calendarName: string;
+  link?: string | null;
+  hasAttendees: boolean;
+  excluded: boolean;
+  isAllDay: boolean;
 }
 
 export interface ParitySettings {
@@ -178,7 +184,7 @@ export interface ParitySettings {
   pasteIntoFocusedApp: boolean;
   saveRawAudio: boolean;
   showOverlayWhenIdle: boolean;
-  theme: "light" | "dark";
+  theme: "system" | "light" | "dark";
   overlayPosition?: string;
   flowbarPlacement?: FlowbarPlacement | null;
   meetingMicrophone: boolean;

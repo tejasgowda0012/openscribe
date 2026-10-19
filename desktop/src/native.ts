@@ -1,19 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { AppSettings, AudioInput } from "./types";
+import type { ParitySettings } from "./api/parityTypes";
 
-export const speechAccount = (settings: AppSettings) => `speech:${settings.speechProvider}:${settings.speechBaseUrl}`;
-export const writingAccount = (settings: AppSettings) => `writing:${settings.writingProvider}:${settings.writingBaseUrl}`;
+type Settings = AppSettings | ParitySettings;
+export const speechAccount = (settings: Settings) => `speech:${settings.speechProvider}:${"speechBaseURL" in settings ? settings.speechBaseURL : settings.speechBaseUrl}`;
+export const writingAccount = (settings: Settings) => "languageModelProvider" in settings ? `writing:${settings.languageModelProvider}:${settings.languageModelBaseURL}` : `writing:${settings.writingProvider}:${settings.writingBaseUrl}`;
 
-const config = (settings: AppSettings, purpose: "speech" | "writing") => purpose === "speech" ? {
+export const config = (settings: Settings, purpose: "speech" | "writing") => purpose === "speech" ? {
   provider: settings.speechProvider,
-  baseUrl: settings.speechBaseUrl,
+  baseUrl: "speechBaseURL" in settings ? settings.speechBaseURL : settings.speechBaseUrl,
   model: settings.speechModel,
   credentialAccount: speechAccount(settings)
 } : {
-  provider: settings.writingProvider,
-  baseUrl: settings.writingBaseUrl,
-  model: settings.writingModel,
+  provider: "languageModelProvider" in settings ? settings.languageModelProvider : settings.writingProvider,
+  baseUrl: "languageModelBaseURL" in settings ? settings.languageModelBaseURL : settings.writingBaseUrl,
+  model: "languageModel" in settings ? settings.languageModel : settings.writingModel,
   credentialAccount: writingAccount(settings)
 };
 
@@ -22,8 +24,9 @@ export const native = {
   startRecording: (deviceId?: string) => invoke<string>("start_recording", { deviceId: deviceId || null }),
   stopRecording: () => invoke<{ path: string; duration: number }>("stop_recording"),
   deleteRecording: (path: string) => invoke<void>("delete_recording", { path }),
-  transcribe: (path: string, settings: AppSettings) => invoke<{ text: string }>("transcribe_recording", { path, config: config(settings, "speech") }),
-  clean: (text: string, settings: AppSettings, instruction: string) => invoke<{ text: string }>("clean_transcript", { text, config: config(settings, "writing"), instruction }),
+  transcribe: (path: string, settings: Settings, hints?: { prompt: string | null; terms: string[] }) => invoke<{ text: string }>("transcribe_recording", { path, config: config(settings, "speech"), ...(hints === undefined ? {} : { hints }) }),
+  clean: (text: string, settings: Settings, instruction: string) => invoke<{ text: string }>("clean_transcript", { text, config: config(settings, "writing"), instruction }),
+  setDictationBusy: (busy: boolean) => invoke<void>("set_dictation_busy", { busy }),
   saveCredential: (account: string, secret: string) => invoke<void>("save_credential", { account, secret }),
   hasCredential: (account: string) => invoke<boolean>("has_credential", { account }),
   removeCredential: (account: string) => invoke<void>("remove_credential", { account }),

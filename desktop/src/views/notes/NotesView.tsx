@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Calendar as CalendarIcon,
   ChevronRight,
@@ -11,12 +11,15 @@ import {
 import { deleteNote, saveNote } from "../../api/parity";
 import type { VoiceNote } from "../../api/parityTypes";
 import { DayNoteView } from "./DayNoteView";
+import { localDay } from "../../core/dailyNotes";
+import { reportUiError } from "../../workspaceEvents";
 
 interface NotesViewProps {
   notes: VoiceNote[];
   selectedId?: string;
   onSelectNote: (id: string) => void;
   onUpdateNotes: (notes: VoiceNote[]) => void;
+  onRefreshNotes: () => Promise<void>;
   onOpenMeeting?: (meetingId: string) => void;
   onStartDictation?: () => void;
   onStartMeeting?: () => void;
@@ -27,19 +30,42 @@ export const NotesView: React.FC<NotesViewProps> = ({
   selectedId,
   onSelectNote,
   onUpdateNotes,
+  onRefreshNotes,
   onOpenMeeting,
   onStartDictation,
   onStartMeeting
 }) => {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "daily" | "written">("all");
+  const [drafts, setDrafts] = useState<Record<string, VoiceNote>>({});
+  const [saveStatus, setSaveStatus] = useState("");
+  const pending = useRef(new Map<string, VoiceNote>());
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const writes = useRef<Promise<unknown>>(Promise.resolve());
+  const refresh = useRef(onRefreshNotes); refresh.current = onRefreshNotes;
+  const allNotes = [...notes.map(note => drafts[note.id] ?? note), ...Object.values(drafts).filter(note => !notes.some(existing => existing.id === note.id))];
+  const flush = () => {
+    const edits = [...pending.current.values()]; pending.current.clear();
+    for (const note of edits) {
+      writes.current = writes.current.catch(() => undefined).then(async () => {
+        await saveNote(note);
+        await refresh.current();
+        setSaveStatus("Saved");
+        setDrafts(current => {
+          if (current[note.id] !== note) return current;
+          const next = { ...current }; delete next[note.id]; return next;
+        });
+      }).catch(error => { setSaveStatus("Could not save. Your draft is still here; edit to retry."); reportUiError(error); });
+    }
+  };
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); flush(); }, []);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = localDay(new Date());
 
   // Find or craft today's note
   const todayNote = useMemo(() => {
     return (
-      notes.find((n) => n.createdAt.startsWith(todayStr) && n.captures != null) ?? {
+      notes.find((n) => localDay(n.createdAt) === todayStr && n.captures != null) ?? {
         id: "today-placeholder",
         createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
         title: "Today",
@@ -57,7 +83,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
   // Filter notes
   const filteredNotes = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return notes.filter((n) => {
+    return allNotes.filter((n) => {
       if (filter === "daily" && !n.captures) return false;
       if (filter === "written" && n.captures) return false;
       if (!q) return true;
@@ -72,40 +98,42 @@ export const NotesView: React.FC<NotesViewProps> = ({
       );
       return titleMatch || textMatch || captureMatch;
     });
-  }, [notes, search, filter]);
+  }, [notes, drafts, search, filter]);
 
   const selectedNote = useMemo(() => {
     if (!selectedId || selectedId === "today-placeholder" || selectedId === todayNote.id) {
       return todayNote;
     }
-    return notes.find((n) => n.id === selectedId) ?? todayNote;
-  }, [notes, selectedId, todayNote]);
+    return allNotes.find((n) => n.id === selectedId) ?? todayNote;
+  }, [notes, drafts, selectedId, todayNote]);
 
-  const handleUpdateNote = (updated: VoiceNote) => {
-    if (updated.id === "today-placeholder") {
-      const realNote = { ...updated, id: crypto.randomUUID().toUpperCase() };
-      const next = [realNote, ...notes];
-      onUpdateNotes(next);
-      onSelectNote(realNote.id);
-      saveNote(realNote).catch(console.error);
-      return;
+  const handleUpdateNote = async (updated: VoiceNote) => {
+    await saveNote(updated);
+    await onRefreshNotes();
+  };
+  const handleEdit = (updated: VoiceNote) => {
+    setDrafts(current => ({ ...current, [updated.id]: updated }));
+    if (!notes.some(note => note.id === updated.id) && !updated.cleanedText.trim() && !updated.rawText.trim() && (!updated.title.trim() || updated.title === "Untitled note")) {
+      pending.current.delete(updated.id); setSaveStatus("Draft · type to save"); return;
     }
-    const next = notes.map((n) => (n.id === updated.id ? updated : n));
-    onUpdateNotes(next);
-    saveNote(updated).catch(console.error);
+    setSaveStatus("Unsaved changes");
+    pending.current.set(updated.id, updated);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(flush, 400);
   };
 
   const handleDelete = async (id: string) => {
     if (id === "today-placeholder") return;
     try {
+      pending.current.delete(id);
+      await writes.current;
       await deleteNote(id);
-      const next = notes.filter((n) => n.id !== id);
-      onUpdateNotes(next);
+      pending.current.delete(id);
+      setDrafts(current => { const next = { ...current }; delete next[id]; return next; });
+      await onRefreshNotes();
       onSelectNote("today-placeholder");
-    } catch {
-      const next = notes.filter((n) => n.id !== id);
-      onUpdateNotes(next);
-      onSelectNote("today-placeholder");
+    } catch (error) {
+      reportUiError(error);
     }
   };
 
@@ -113,23 +141,22 @@ export const NotesView: React.FC<NotesViewProps> = ({
     const newNote: VoiceNote = {
       id: crypto.randomUUID().toUpperCase(),
       createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
-      title: "Untitled Note",
+      title: "Untitled note",
       rawText: "",
       cleanedText: "",
       duration: 0,
       isPinned: false,
       tags: [],
-      source: "Written"
+      source: "Note"
     };
-    const next = [newNote, ...notes];
-    onUpdateNotes(next);
+    setDrafts(current => ({ ...current, [newNote.id]: newNote }));
     onSelectNote(newNote.id);
-    saveNote(newNote).catch(console.error);
+    setSaveStatus("Draft · type to save");
   };
 
   const isSelectedToday =
     selectedNote.id === "today-placeholder" ||
-    (selectedNote.captures != null && selectedNote.createdAt.startsWith(todayStr));
+    (selectedNote.captures != null && localDay(selectedNote.createdAt) === todayStr);
 
   return (
     <div style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
@@ -337,6 +364,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
             note={selectedNote}
             isToday={isSelectedToday}
             onUpdate={handleUpdateNote}
+            onRefresh={onRefreshNotes}
             onDeleteNote={handleDelete}
             onOpenMeeting={onOpenMeeting}
             onStartDictation={onStartDictation}
@@ -349,7 +377,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
                 type="text"
                 value={selectedNote.title}
                 onChange={(e) =>
-                  handleUpdateNote({ ...selectedNote, title: e.target.value })
+                  handleEdit({ ...selectedNote, title: e.target.value })
                 }
                 placeholder="Note title"
                 style={{
@@ -376,7 +404,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
             <textarea
               value={selectedNote.cleanedText || selectedNote.rawText}
               onChange={(e) =>
-                handleUpdateNote({
+                handleEdit({
                   ...selectedNote,
                   cleanedText: e.target.value,
                   rawText: e.target.value
@@ -395,6 +423,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
                 fontFamily: "inherit"
               }}
             />
+            <small role="status">{saveStatus}</small>
           </div>
         )}
       </div>

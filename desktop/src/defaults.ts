@@ -1,14 +1,14 @@
 import type { AppSettings, PersistedState, ProviderChoice } from "./types";
 
 export const providers: ProviderChoice[] = [
-  { id: "openRouter", title: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", speechModel: "mistralai/voxtral-mini-transcribe", writingModel: "openai/gpt-4o-mini" },
+  { id: "openRouter", title: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", speechModel: "mistralai/voxtral-mini-transcribe", writingModel: "openai/gpt-5.6-luna" },
   { id: "openAI", title: "OpenAI", baseUrl: "https://api.openai.com/v1", speechModel: "gpt-4o-mini-transcribe", writingModel: "gpt-4o-mini" },
   { id: "groq", title: "Groq", baseUrl: "https://api.groq.com/openai/v1", speechModel: "whisper-large-v3-turbo", writingModel: "llama-3.3-70b-versatile" },
   { id: "deepgram", title: "Deepgram", baseUrl: "https://api.deepgram.com/v1", speechModel: "nova-3" },
   { id: "assemblyAI", title: "AssemblyAI", baseUrl: "https://api.assemblyai.com/v2", speechModel: "best" },
-  { id: "mistral", title: "Mistral", baseUrl: "https://api.mistral.ai/v1", speechModel: "voxtral-mini-latest" },
-  { id: "anthropic", title: "Anthropic", baseUrl: "https://api.anthropic.com", writingModel: "claude-haiku-4-5-20251001" },
-  { id: "google", title: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com", writingModel: "gemini-3.7-flash" },
+  { id: "mistral", title: "Mistral", baseUrl: "https://api.mistral.ai/v1", speechModel: "voxtral-mini-transcribe-realtime-2602" },
+  { id: "anthropic", title: "Anthropic", baseUrl: "https://api.anthropic.com", writingModel: "claude-3-5-haiku-latest" },
+  { id: "google", title: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com", writingModel: "gemini-2.0-flash" },
   { id: "custom", title: "Custom compatible endpoint", baseUrl: "https://example.com/v1", speechModel: "whisper-1", writingModel: "gpt-4o-mini" }
 ];
 
@@ -24,7 +24,7 @@ export const defaultSettings: AppSettings = {
   writingTone: "natural",
   pasteIntoFocusedApp: true,
   saveRawAudio: false,
-  shortcut: "Alt+Space",
+  shortcut: "Ctrl+Alt+Space",
   microphoneDeviceId: "",
   systemAudioDeviceId: "",
   customVocabulary: [],

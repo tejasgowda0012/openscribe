@@ -1,26 +1,21 @@
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, Command, RotateCcw } from "lucide-react";
-import { registerShortcuts, suspendShortcuts } from "../../api/parity";
+import { suspendShortcuts } from "../../api/parity";
 import type {
   ParitySettings,
   ShortcutAction,
   ShortcutBinding
 } from "../../api/parityTypes";
 
+import { defaultBindings, parseAccelerator, validateBindings } from "../../core/shortcuts";
+import { reportUiError } from "../../workspaceEvents";
+
 interface ShortcutsSettingsProps {
   settings: ParitySettings;
-  onUpdateSettings: (settings: ParitySettings) => void;
+  onUpdateSettings: (settings: ParitySettings) => void | Promise<void>;
 }
 
-const DEFAULT_SHORTCUTS: Record<ShortcutAction, ShortcutBinding> = {
-  dictate: { accelerator: "Alt+Space", display: "Alt Space" },
-  holdToTalk: { accelerator: "Alt+H", display: "Alt H" },
-  meeting: { accelerator: "Alt+M", display: "Alt M" },
-  screenshotArea: { accelerator: "Alt+1", display: "Alt 1" },
-  screenshotWindow: { accelerator: "Alt+2", display: "Alt 2" },
-  screenshotScreen: { accelerator: "Alt+3", display: "Alt 3" },
-  pasteLast: { accelerator: "Alt+V", display: "Alt V" }
-};
+const DEFAULT_SHORTCUTS = defaultBindings;
 
 const ACTION_DESCRIPTIONS: Record<
   ShortcutAction,
@@ -87,73 +82,29 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
 
   useEffect(() => {
     if (!recordingAction) return;
-
-    // Suspend global shortcuts while recording to avoid triggering them
-    suspendShortcuts(true).catch(() => undefined);
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      if (e.key === "Escape") {
-        setRecordingAction(null);
-        suspendShortcuts(false).catch(() => undefined);
-        return;
-      }
-
-      // Modifier-only press: wait for letter / key
-      if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) {
-        return;
-      }
-
-      const parts: string[] = [];
-      if (e.ctrlKey) parts.push("Ctrl");
-      if (e.altKey) parts.push("Alt");
-      if (e.shiftKey) parts.push("Shift");
-      if (e.metaKey) parts.push("Super");
-
-      let keyName = e.key.toUpperCase();
-      if (e.code.startsWith("Digit")) keyName = e.code.replace("Digit", "");
-      if (e.code.startsWith("Key")) keyName = e.code.replace("Key", "");
-      if (e.key === " ") keyName = "Space";
-
-      parts.push(keyName);
-
-      const accelerator = parts.join("+");
-      const display = parts.join(" ");
-
-      const nextShortcuts = {
-        ...shortcuts,
-        [recordingAction]: { accelerator, display }
-      };
-
-      const updatedSettings = {
-        ...settings,
-        shortcuts: nextShortcuts
-      };
-
-      onUpdateSettings(updatedSettings);
-      registerShortcuts(nextShortcuts as Record<string, ShortcutBinding>).catch(console.error);
-
-      setRecordingAction(null);
-      suspendShortcuts(false).catch(() => undefined);
+    let active = true;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault(); event.stopPropagation();
+      if (event.key === "Escape") { setRecordingAction(null); return; }
+      if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
+      try {
+        const key = event.key === " " ? "Space" : event.code.startsWith("Key") ? event.code.slice(3) : event.code.startsWith("Digit") ? event.code.slice(5) : event.key;
+        const binding = parseAccelerator([event.ctrlKey && "Ctrl", event.altKey && "Alt", event.shiftKey && "Shift", event.metaKey && "Super", key].filter(Boolean).join("+"));
+        const next = { ...shortcuts, [recordingAction]: binding }; validateBindings(next);
+        void Promise.resolve(onUpdateSettings({ ...settings, shortcuts: next })).catch(reportUiError).finally(() => { if (active) setRecordingAction(null); });
+      } catch (error) { reportUiError(error); }
     };
-
-    window.addEventListener("keydown", handleKeyDown);
+    void suspendShortcuts(true).then(() => {
+      if (active) window.addEventListener("keydown", handleKeyDown);
+      else return suspendShortcuts(false);
+    }).catch(error => { reportUiError(error); setRecordingAction(null); });
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      suspendShortcuts(false).catch(() => undefined);
+      active = false; window.removeEventListener("keydown", handleKeyDown);
+      void suspendShortcuts(false).catch(reportUiError);
     };
   }, [recordingAction, shortcuts, settings, onUpdateSettings]);
 
-  const handleRestoreDefaults = () => {
-    const updated = {
-      ...settings,
-      shortcuts: DEFAULT_SHORTCUTS
-    };
-    onUpdateSettings(updated);
-    registerShortcuts(DEFAULT_SHORTCUTS).catch(console.error);
-  };
+  const handleRestoreDefaults = () => { void Promise.resolve(onUpdateSettings({ ...settings, shortcuts: DEFAULT_SHORTCUTS })).catch(reportUiError); };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>

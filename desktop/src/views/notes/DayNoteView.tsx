@@ -31,11 +31,13 @@ import type {
   VoiceNote
 } from "../../api/parityTypes";
 import { formatDuration } from "../meetings/transcriptHelpers";
+import { reportUiError, sendIntent } from "../../workspaceEvents";
 
 interface DayNoteViewProps {
   note: VoiceNote;
   isToday: boolean;
-  onUpdate: (updated: VoiceNote) => void;
+  onUpdate: (updated: VoiceNote) => Promise<void>;
+  onRefresh: () => Promise<void>;
   onDeleteNote: (id: string) => void;
   onOpenMeeting?: (meetingId: string) => void;
   onStartDictation?: () => void;
@@ -46,6 +48,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
   note,
   isToday,
   onUpdate,
+  onRefresh,
   onDeleteNote,
   onOpenMeeting,
   onStartDictation,
@@ -91,65 +94,35 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
     };
 
     try {
-      const updatedNote = await addCapture(newCapture);
-      onUpdate(updatedNote);
+      await addCapture(newCapture);
+      await onRefresh();
       setComposer("");
-    } catch {
-      // Fallback local update
-      const updated = {
-        ...note,
-        captures: [...captures, newCapture]
-      };
-      onUpdate(updated);
-      saveNote(updated).catch(console.error);
-      setComposer("");
+    } catch (error) {
+      reportUiError(error);
     }
   };
 
   const handleTakeScreenshot = async (kind: "area" | "window" | "screen") => {
     setScreenshotDropdown(false);
     try {
-      const cap = await takeScreenshot(kind);
-      if (cap) {
-        try {
-          const updated = await addCapture(cap);
-          onUpdate(updated);
-        } catch {
-          const updated = {
-            ...note,
-            captures: [...captures, cap]
-          };
-          onUpdate(updated);
-          saveNote(updated).catch(console.error);
-        }
-      }
+      await sendIntent({ action: "screenshot", kind });
     } catch (err) {
-      console.warn("Screenshot error:", err);
+      reportUiError(err);
     }
   };
 
   const handleDeleteEntry = async (captureId: string) => {
     try {
       await removeCapture(captureId, note.id);
-      const updated = {
-        ...note,
-        captures: captures.filter((c) => c.id !== captureId)
-      };
-      onUpdate(updated);
-    } catch {
-      const updated = {
-        ...note,
-        captures: captures.filter((c) => c.id !== captureId)
-      };
-      onUpdate(updated);
-      saveNote(updated).catch(console.error);
+      await onRefresh();
+    } catch (error) {
+      reportUiError(error);
     }
   };
 
   const handleTogglePin = async () => {
     const updated = { ...note, isPinned: !note.isPinned };
-    onUpdate(updated);
-    saveNote(updated).catch(console.error);
+    try { await onUpdate(updated); } catch (error) { reportUiError(error); }
   };
 
   const handleCopyMarkdown = () => {

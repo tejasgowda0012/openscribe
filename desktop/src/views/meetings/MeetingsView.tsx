@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -52,6 +52,9 @@ import {
   mapCitations
 } from "./transcriptHelpers";
 
+import { reportUiError, sendIntent } from "../../workspaceEvents";
+import { MeetingRecordings } from "./MeetingRecordings";
+
 interface MeetingsViewProps {
   meetings: MeetingRecord[];
   activeMeetingId?: string | null;
@@ -78,6 +81,26 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
   const [startDropdown, setStartDropdown] = useState(false);
   const [showErrorDetails, setShowErrorDetails] = useState(false);
   const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | null>(null);
+
+  const [drafts, setDrafts] = useState<Record<string, MeetingRecord>>({});
+  const edits = useRef(new Map<string, MeetingRecord>());
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const refresh = useRef(onUpdateMeetings); refresh.current = onUpdateMeetings;
+  const flushEdits = () => {
+    const pending = [...edits.current.values()]; edits.current.clear();
+    for (const record of pending) saveQueue.current = saveQueue.current.catch(() => undefined).then(async () => {
+      await updateMeeting(record); refresh.current([]);
+      setDrafts(current => { if (current[record.id] !== record) return current; const next = { ...current }; delete next[record.id]; return next; });
+    }).catch(reportUiError);
+  };
+  const editRecord = (record: MeetingRecord) => {
+    setDrafts(current => ({ ...current, [record.id]: record })); edits.current.set(record.id, record);
+    if (saveTimer.current) clearTimeout(saveTimer.current); saveTimer.current = setTimeout(flushEdits, 400);
+  };
+  useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); flushEdits(); }, []);
+  const run = (operation: Promise<unknown>) => { void operation.catch(reportUiError); };
+  const recoverableMeetings = meetings.filter(record => record.status === "failed" || record.status === "interrupted");
 
   // Group meetings by date
   const groupedMeetings = useMemo(() => {
@@ -120,10 +143,10 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
 
   const selectedRecord = useMemo(() => {
     if (selectedId) {
-      return meetings.find((m) => m.id === selectedId) ?? meetings[0] ?? null;
+      const record = meetings.find((m) => m.id === selectedId) ?? meetings[0]; return record ? drafts[record.id] ?? record : null;
     }
-    return meetings[0] ?? null;
-  }, [meetings, selectedId]);
+    return meetings[0] ? drafts[meetings[0].id] ?? meetings[0] : null;
+  }, [meetings, selectedId, drafts]);
 
   const passages = useMemo(() => {
     if (!selectedRecord) return [];
@@ -136,74 +159,20 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
     });
   }, [selectedRecord, trackFilter, transcriptSearch]);
 
-  const handleStartMeeting = async () => {
-    setStartDropdown(false);
-    try {
-      const rec = await startMeeting({
-        title: "Meeting " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        microphone: settings.meetingMicrophone,
-        systemAudio: settings.meetingSystemAudio,
-        summarizeOnStop: settings.meetingSummarize,
-        liveTranscription: settings.meetingLiveTranscription
-      });
-      onUpdateMeetings([rec, ...meetings]);
-      onSelectMeeting(rec.id);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleFinish = async () => {
-    if (!selectedRecord) return;
-    await finishMeeting({ summarize: selectedRecord.summarizeOnStop });
-  };
-
-  const handlePauseResume = async () => {
-    if (!selectedRecord) return;
-    if (selectedRecord.status === "paused") {
-      await resumeMeeting();
-    } else {
-      await pauseMeeting();
-    }
-  };
-
+  const handleStartMeeting = () => { setStartDropdown(false); run(sendIntent({ action: "meeting" })); };
+  const handleFinish = () => { run(sendIntent({ action: "meeting" })); };
+  const handlePauseResume = () => { run(sendIntent({ action: "pauseMeeting" })); };
   const handleDelete = async (id: string) => {
-    await deleteMeeting(id);
-    const next = meetings.filter((m) => m.id !== id);
-    onUpdateMeetings(next);
-    if (selectedRecord?.id === id) {
-      onSelectMeeting(next[0]?.id ?? "");
-    }
+    try {
+      edits.current.delete(id); await saveQueue.current;
+      await deleteMeeting(id); onUpdateMeetings(meetings.filter(record => record.id !== id));
+      if (selectedRecord?.id === id) onSelectMeeting("");
+    } catch (error) { reportUiError(error); }
   };
-
   const handleExportMarkdown = async () => {
     if (!selectedRecord) return;
-    try {
-      const md = await exportMeetingMarkdown(selectedRecord.id);
-      await navigator.clipboard.writeText(md);
-      alert("Meeting exported and copied to clipboard as Markdown!");
-    } catch {
-      // Fallback export
-      let md = `# ${selectedRecord.title}\n\n`;
-      if (selectedRecord.summary) {
-        md += `## Key Points\n`;
-        selectedRecord.summary.overview.forEach((p) => { md += `- ${p.text}\n`; });
-        md += `\n## Decisions\n`;
-        selectedRecord.summary.decisions.forEach((p) => { md += `- ${p.text}\n`; });
-        md += `\n## Action Items\n`;
-        selectedRecord.summary.actions.forEach((p) => { md += `- [ ] ${p.text}\n`; });
-        md += `\n`;
-      }
-      if (selectedRecord.userNotes) {
-        md += `## Notes\n${selectedRecord.userNotes}\n\n`;
-      }
-      md += `## Transcript\n`;
-      passages.forEach((p) => {
-        md += `**${p.track === "microphone" ? selectedRecord.microphoneLabel : selectedRecord.systemLabel} (${formatTimestamp(p.start)}):** ${p.text}\n\n`;
-      });
-      await navigator.clipboard.writeText(md);
-      alert("Meeting copied to clipboard as Markdown!");
-    }
+    try { const md = await exportMeetingMarkdown(selectedRecord.id); await navigator.clipboard.writeText(md); }
+    catch (error) { reportUiError(error); }
   };
 
   const jumpToCitation = (sourceId: string) => {
@@ -475,8 +444,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   value={selectedRecord.title}
                   onChange={(e) => {
                     const updated = { ...selectedRecord, title: e.target.value };
-                    onUpdateMeetings(meetings.map((m) => (m.id === updated.id ? updated : m)));
-                    updateMeeting(updated).catch(console.error);
+                    editRecord(updated);
                   }}
                   style={{
                     fontSize: 20,
@@ -626,7 +594,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       onClick={async () => {
-                        await summarizeShortMeeting(selectedRecord.id);
+                        await summarizeShortMeeting(selectedRecord.id).catch(reportUiError);
                         onUpdateMeetings(
                           meetings.map((m) =>
                             m.id === selectedRecord.id ? { ...m, summaryNeedsConfirmation: false } : m
@@ -648,7 +616,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                     </button>
                     <button
                       onClick={async () => {
-                        await skipSummary(selectedRecord.id);
+                        await skipSummary(selectedRecord.id).catch(reportUiError);
                         onUpdateMeetings(
                           meetings.map((m) =>
                             m.id === selectedRecord.id ? { ...m, summaryNeedsConfirmation: false } : m
@@ -706,7 +674,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
-                      onClick={() => processMeeting(selectedRecord.id)}
+                      onClick={() => run(processMeeting(selectedRecord.id))}
                       style={{
                         background: "#dc2626",
                         color: "#ffffff",
@@ -725,6 +693,11 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
               )}
             </div>
 
+            {recoverableMeetings.length > 0 && <div role="status" style={{ padding: 12, background: "#fef3c7" }}>{recoverableMeetings.length} meetings need attention. <button onClick={() => {
+              if (confirm("Permanently delete all failed and interrupted meetings and their recordings?")) run((async () => { try { for (const record of recoverableMeetings) await deleteMeeting(record.id); } finally { onUpdateMeetings([]); } })());
+            }}>Discard all</button></div>}
+            {isActive && selectedRecord.lastError && <button onClick={() => run(retryLiveTranscription())}>Retry live transcription</button>}
+            {(selectedRecord.status === "transcribing" || selectedRecord.status === "summarizing") && <button onClick={() => run(cancelProcessing())}>Cancel processing</button>}
             {/* Tabs */}
             <div
               style={{
@@ -778,6 +751,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
               >
                 My notes
               </button>
+              <button onClick={() => setTab("recording")} style={{ background: "transparent", border: "none", color: tab === "recording" ? "#2563eb" : "#6b7280", cursor: "pointer" }}>Recording</button>
             </div>
 
             {/* Tab Contents */}
@@ -921,7 +895,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                           : "Transcribe and summarize to extract key points and action items."}
                       </p>
                       <button
-                        onClick={() => processMeeting(selectedRecord.id)}
+                        onClick={() => run(processMeeting(selectedRecord.id))}
                         style={{
                           background: "#2563eb",
                           color: "#ffffff",
@@ -1024,13 +998,13 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 </div>
               )}
 
+              {tab === "recording" && <MeetingRecordings record={selectedRecord} />}
               {tab === "notes" && (
                 <textarea
                   value={selectedRecord.userNotes ?? ""}
                   onChange={(e) => {
                     const updated = { ...selectedRecord, userNotes: e.target.value };
-                    onUpdateMeetings(meetings.map((m) => (m.id === updated.id ? updated : m)));
-                    updateMeeting(updated).catch(console.error);
+                    editRecord(updated);
                   }}
                   placeholder="Jot down notes about this meeting…"
                   style={{

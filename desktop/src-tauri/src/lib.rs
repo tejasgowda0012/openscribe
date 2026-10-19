@@ -10,10 +10,14 @@ pub mod meeting_audio;
 pub mod meetings;
 mod migrate;
 pub mod notes;
+pub mod ocr;
 mod platform;
 pub mod provider;
+pub mod region_select;
+pub mod screenshot;
 pub mod shortcuts;
 pub mod storage;
+mod storage_hooks;
 pub mod summary;
 mod tray;
 
@@ -203,7 +207,10 @@ pub fn run() {
             shortcuts::register_shortcuts,
             shortcuts::suspend_shortcuts,
             calendar::calendar_refresh,
-            calendar::calendar_decision
+            calendar::calendar_decision,
+            screenshot::take_screenshot,
+            region_select::complete_region_select,
+            region_select::cancel_region_select
         ])
         .run(tauri::generate_context!())
         .expect("error while running OpenScribe");

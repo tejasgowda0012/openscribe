@@ -1,330 +1,57 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Window } from "@tauri-apps/api/window";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import {
-  AlertTriangle,
-  AudioLines,
-  CalendarDays,
-  Check,
-  ChevronRight,
-  CircleStop,
-  Clipboard,
-  FileAudio,
-  KeyRound,
-  Library,
-  Mic,
-  Moon,
-  Plus,
-  RefreshCw,
-  Search,
-  Settings,
-  Sparkles,
-  Sun,
-  Trash2,
-  Users,
-  X
-} from "lucide-react";
-import {
-  calendarDecision,
-  calendarRefresh,
-  finishMeeting,
-  listMeetings,
-  loadProfile,
-  parityEvents,
-  saveSettings,
-  startMeeting,
-  type CalendarPromptEndEvent,
-  type CalendarPromptStartEvent
-} from "./api/parity";
-import type {
-  CalendarEvent,
-  MeetingRecord,
-  ParitySettings,
-  VoiceNote
-} from "./api/parityTypes";
-import { friendlyError, native, speechAccount, writingAccount } from "./native";
-import { cleanupInstructions, providerDefaults, providers } from "./defaults";
+import { AlertTriangle, CalendarDays, CircleStop, FileAudio, Library, Mic, Settings, Users, X } from "lucide-react";
+import { mainController } from "./mainController";
 import { MeetingsView } from "./views/meetings/MeetingsView";
 import { NotesView } from "./views/notes/NotesView";
 import { SettingsView } from "./views/settings/SettingsView";
-import type { AudioInput, CapturePhase, RecoveryJob } from "./types";
-
-export const defaultParitySettings: ParitySettings = {
-  speechProvider: "groq",
-  speechBaseURL: "https://api.groq.com/openai/v1",
-  speechModel: "whisper-large-v3-turbo",
-  languageModelProvider: "groq",
-  languageModelBaseURL: "https://api.groq.com/openai/v1",
-  languageModel: "llama-3.3-70b-versatile",
-  writingTone: "natural",
-  customVocabulary: [],
-  correctionRules: [],
-  cleanupStrength: "clear",
-  speechHints: true,
-  spokenCorrections: true,
-  learnSpelledWords: true,
-  correctionModel: "llama-3.1-8b-instant",
-  dictationLiveTranscription: true,
-  meetingLiveTranscription: true,
-  calendarEnabled: true,
-  calendarExcludedTitles: ["personal", "1:1"],
-  calendarAutoStart: false,
-  calendarMeetingsOnly: true,
-  calendarSummarize: true,
-  microphoneDeviceUID: "",
-  interactionSounds: true,
-  snippets: [],
-  appWritingTones: {},
-  cleanupEnabled: true,
-  pasteIntoFocusedApp: false,
-  saveRawAudio: false,
-  showOverlayWhenIdle: true,
-  theme: "light",
-  overlayPosition: "bottom-center",
-  flowbarPlacement: null,
-  meetingMicrophone: true,
-  meetingSystemAudio: true,
-  meetingSummarize: true,
-  shortcuts: {
-    dictate: { accelerator: "Alt+Space", display: "Alt Space" },
-    holdToTalk: { accelerator: "Alt+H", display: "Alt H" },
-    meeting: { accelerator: "Alt+M", display: "Alt M" },
-    screenshotArea: { accelerator: "Alt+1", display: "Alt 1" },
-    screenshotWindow: { accelerator: "Alt+2", display: "Alt 2" },
-    screenshotScreen: { accelerator: "Alt+3", display: "Alt 3" },
-    pasteLast: { accelerator: "Alt+V", display: "Alt V" }
-  },
-  systemAudioDeviceId: "",
-  calendarSources: []
-};
+import type { ParitySettings } from "./api/parityTypes";
+export { defaultParitySettings } from "./settings";
 
 export default function App() {
-  const [settings, setSettings] = useState<ParitySettings>(defaultParitySettings);
-  const [notes, setNotes] = useState<VoiceNote[]>([]);
-  const [meetings, setMeetings] = useState<MeetingRecord[]>([]);
-  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
-  const [recoveries, setRecoveries] = useState<RecoveryJob[]>([]);
-  const [inputs, setInputs] = useState<AudioInput[]>([]);
-
-  const [loaded, setLoaded] = useState(false);
-  const [storageError, setStorageError] = useState<string | null>(null);
+  const { settings, notes, meetings, calendarEvents, recoveries, inputs, loaded, storageError, notice, phase, startPrompt, endPrompt, navigation } = useSyncExternalStore(mainController.subscribe, mainController.snapshot);
+  const activeMeetingId = mainController.activeMeeting?.id ?? null;
   const [section, setSection] = useState<"notes" | "meetings" | "calendar" | "settings">("notes");
-  const [selectedNoteId, setSelectedNoteId] = useState<string>("today-placeholder");
+  const [selectedNoteId, setSelectedNoteId] = useState("today-placeholder");
   const [selectedMeetingId, setSelectedMeetingId] = useState<string>();
-  const [activeMeetingId, setActiveMeetingId] = useState<string | null>(null);
-  const [phase, setPhase] = useState<CapturePhase>("idle");
-  const [onboarding, setOnboarding] = useState(false);
   const [confirmDiscardAll, setConfirmDiscardAll] = useState(false);
-
-  // Calendar Prompts
-  const [startPrompt, setStartPrompt] = useState<CalendarPromptStartEvent | null>(null);
-  const [autoStartCountdown, setAutoStartCountdown] = useState<number | null>(null);
-  const [endPrompt, setEndPrompt] = useState<CalendarPromptEndEvent | null>(null);
-
+  const [now, setNow] = useState(Date.now());
+  const autoStartCountdown = startPrompt?.automatic ? Math.max(0, Math.ceil((Date.parse(startPrompt.deadline) - now) / 1000)) : null;
+  const endCountdown = endPrompt?.automatic ? Math.max(0, Math.ceil((Date.parse(endPrompt.deadline) - now) / 1000)) : null;
+  useEffect(() => { void mainController.initialize(); }, []);
   useEffect(() => {
-    // Load profile
-    loadProfile()
-      .then((res) => {
-        if (res.settings) {
-          setSettings({ ...defaultParitySettings, ...res.settings });
-        }
-        if (res.notes) {
-          setNotes(res.notes);
-        }
-        if (res.storageError) {
-          setStorageError(res.storageError);
-        }
-        setLoaded(true);
-      })
-      .catch((err) => {
-        console.error("Failed to load profile:", err);
-        setLoaded(true);
-      });
-
-    // Load meetings
-    listMeetings()
-      .then((all) => {
-        setMeetings(all);
-        const active = all.find((m) => m.status === "recording" || m.status === "paused");
-        if (active) setActiveMeetingId(active.id);
-      })
-      .catch(console.error);
-
-    // Load calendar events
-    calendarRefresh()
-      .then(setCalendarEvents)
-      .catch(() => undefined);
-
-    // Audio inputs
-    native
-      .listInputs()
-      .then(setInputs)
-      .catch(() => undefined);
-
-    // Subscriptions
-    const unlistens: Array<() => void> = [];
-
-    parityEvents.onMeetingChanged((record) => {
-      setMeetings((curr) => {
-        const idx = curr.findIndex((m) => m.id === record.id);
-        if (idx >= 0) {
-          const next = [...curr];
-          next[idx] = record;
-          return next;
-        }
-        return [record, ...curr];
-      });
-      if (record.status === "recording" || record.status === "paused") {
-        setActiveMeetingId(record.id);
-      } else if (activeMeetingId === record.id) {
-        setActiveMeetingId(null);
-      }
-    }).then((u) => unlistens.push(u));
-
-    parityEvents.onCalendarPromptStart((prompt) => {
-      setStartPrompt(prompt);
-      if (prompt.autoStartInSeconds) {
-        setAutoStartCountdown(prompt.autoStartInSeconds);
-      }
-    }).then((u) => unlistens.push(u));
-
-    parityEvents.onCalendarPromptEnd((prompt) => {
-      setEndPrompt(prompt);
-    }).then((u) => unlistens.push(u));
-
-    parityEvents.onCaptureOcr(({ captureId, noteId, recognizedText }) => {
-      setNotes((curr) =>
-        curr.map((n) => {
-          if (n.id === noteId && n.captures) {
-            return {
-              ...n,
-              captures: n.captures.map((c) =>
-                c.id === captureId ? { ...c, recognizedText } : c
-              )
-            };
-          }
-          return n;
-        })
-      );
-    }).then((u) => unlistens.push(u));
-
-    return () => {
-      unlistens.forEach((u) => u());
-    };
-  }, []);
-
-  // Theme application
+    if (navigation) { setSection(navigation.section); if (navigation.meetingId) setSelectedMeetingId(navigation.meetingId); }
+  }, [navigation]);
   useEffect(() => {
-    document.documentElement.dataset.theme = settings.theme;
+    const query = matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => { document.documentElement.dataset.theme = settings.theme === "system" ? (query.matches ? "dark" : "light") : settings.theme; };
+    apply(); query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
   }, [settings.theme]);
-
-  // Auto-start countdown timer
   useEffect(() => {
-    if (autoStartCountdown == null || autoStartCountdown <= 0) return;
-    const t = window.setInterval(() => {
-      setAutoStartCountdown((prev) => {
-        if (prev != null && prev <= 1) {
-          window.clearInterval(t);
-          handleCalendarStartDecision("record");
-          return null;
-        }
-        return prev != null ? prev - 1 : null;
-      });
-    }, 1000);
-    return () => window.clearInterval(t);
-  }, [autoStartCountdown]);
-
-  const handleUpdateSettings = (updated: ParitySettings) => {
-    setSettings(updated);
-    saveSettings(updated).catch(console.error);
+    if (!startPrompt && !endPrompt) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [startPrompt, endPrompt]);
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => { if (event.key === "Escape") void mainController.dictation.finish(true); };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
+  const handleUpdateSettings = useCallback((updated: ParitySettings) => mainController.updateSettings(updated).catch(mainController.error), []);
+  const handleCalendarStartDecision = (decision: "start" | "skip") => { if (startPrompt) void mainController.decide(startPrompt, decision).catch(mainController.error); };
+  const handleCalendarEndDecision = (decision: "finish" | "extend") => { if (endPrompt) void mainController.decide(endPrompt, decision).catch(mainController.error); };
+  const handleStartDictation = () => { void mainController.intent({ action: "dictate" }); };
+  const handleStartMeetingFromDock = () => {
+    if (activeMeetingId) { setSection("meetings"); setSelectedMeetingId(activeMeetingId); }
+    else void mainController.intent({ action: "meeting" });
   };
-
-  const handleCalendarStartDecision = async (decision: "record" | "skip") => {
-    if (startPrompt?.occurrenceId) {
-      await calendarDecision(startPrompt.occurrenceId, decision).catch(console.error);
-    }
-    if (decision === "record") {
-      const rec = await startMeeting({
-        title: startPrompt?.title ?? startPrompt?.event?.title ?? "Calendar Meeting",
-        microphone: settings.meetingMicrophone,
-        systemAudio: settings.meetingSystemAudio,
-        summarizeOnStop: settings.calendarSummarize,
-        liveTranscription: settings.meetingLiveTranscription
-      }).catch(console.error);
-      if (rec) {
-        setActiveMeetingId(rec.id);
-        setSelectedMeetingId(rec.id);
-        setSection("meetings");
-      }
-    }
-    setStartPrompt(null);
-    setAutoStartCountdown(null);
-  };
-
-  const handleCalendarEndDecision = async (decision: "finish" | "extend15") => {
-    if (endPrompt?.occurrenceId) {
-      await calendarDecision(endPrompt.occurrenceId, decision).catch(console.error);
-    }
-    if (decision === "finish" && activeMeetingId) {
-      await finishMeeting({ summarize: settings.calendarSummarize }).catch(console.error);
-      setActiveMeetingId(null);
-    }
-    setEndPrompt(null);
-  };
-
-  const handleStartDictation = async () => {
-    if (phase === "recording") {
-      setPhase("transcribing");
-      try {
-        const recording = await native.stopRecording();
-        setPhase("idle");
-      } catch {
-        setPhase("idle");
-      }
-      return;
-    }
-    try {
-      await native.startRecording(settings.microphoneDeviceUID || undefined);
-      setPhase("recording");
-    } catch {
-      setPhase("idle");
-    }
-  };
-
-  const handleStartMeetingFromDock = async () => {
-    if (activeMeetingId) {
-      setSection("meetings");
-      setSelectedMeetingId(activeMeetingId);
-      return;
-    }
-    try {
-      const rec = await startMeeting({
-        title: "Meeting " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        microphone: settings.meetingMicrophone,
-        systemAudio: settings.meetingSystemAudio,
-        summarizeOnStop: settings.meetingSummarize,
-        liveTranscription: settings.meetingLiveTranscription
-      });
-      setMeetings((curr) => [rec, ...curr]);
-      setActiveMeetingId(rec.id);
-      setSelectedMeetingId(rec.id);
-      setSection("meetings");
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
   const handleRevealFlowbar = async () => {
-    try {
-      const flowbar = await Window.getByLabel("flowbar");
-      if (flowbar) {
-        await flowbar.show();
-        await flowbar.setFocus();
-      }
-    } catch (err) {
-      console.warn("Could not reveal flowbar:", err);
-    }
+    try { const flowbar = await Window.getByLabel("flowbar"); await flowbar?.show(); }
+    catch (error) { mainController.error(error); }
   };
+  const setNotes = mainController.setNotes;
+  const setMeetings = mainController.setMeetings;
 
   if (!loaded) {
     return (
@@ -524,6 +251,7 @@ export default function App() {
           </div>
 
           <button
+            disabled={phase === "transcribing" || phase === "cleaning"}
             onClick={activeMeetingId ? handleStartMeetingFromDock : handleStartDictation}
             style={{
               display: "flex",
@@ -544,7 +272,7 @@ export default function App() {
               <>
                 <CircleStop size={14} /> Stop & save
               </>
-            ) : activeMeetingId ? (
+            ) : phase === "starting" ? "Starting?" : phase === "transcribing" || phase === "cleaning" ? "Processing?" : activeMeetingId ? (
               <>
                 <Users size={14} /> View meeting
               </>
@@ -555,13 +283,14 @@ export default function App() {
             )}
           </button>
           <small style={{ fontSize: 10.5, color: "#9ca3af", textAlign: "center" }}>
-            {settings.shortcuts?.dictate?.display ?? "Alt Space"} to dictate
+            {settings.shortcuts?.dictate?.display ?? "Ctrl Alt Space"} to dictate
           </small>
         </div>
       </aside>
 
       {/* Main Workspace Column */}
       <main style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+        {notice && <div role="alert" style={{ padding: "10px 24px", background: "#fee2e2", color: "#991b1b", display: "flex", gap: 12 }}><span style={{ flex: 1 }}>{notice}</span><button onClick={mainController.clearNotice} aria-label="Dismiss notice"><X size={14} /></button></div>}
         {/* Global Storage Error Banner */}
         {storageError && (
           <div
@@ -581,7 +310,7 @@ export default function App() {
               </strong>
             </div>
             <button
-              onClick={() => setStorageError(null)}
+              onClick={mainController.clearStorageError}
               style={{ background: "transparent", border: "none", cursor: "pointer", color: "#991b1b" }}
             >
               <X size={14} />
@@ -627,13 +356,8 @@ export default function App() {
                 {recoveries.length > 1 ? "Discard all" : "Discard"}
               </button>
               <button
-                onClick={() => {
-                  // Retry oldest recovery
-                  const oldest = recoveries[0];
-                  if (oldest) {
-                    setRecoveries((r) => r.slice(1));
-                  }
-                }}
+                disabled={phase !== "idle"}
+                onClick={() => { void mainController.dictation.retry(); }}
                 style={{
                   background: "#d97706",
                   color: "#ffffff",
@@ -698,7 +422,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
-                    setRecoveries([]);
+                    void mainController.dictation.discard();
                     setConfirmDiscardAll(false);
                   }}
                   style={{
@@ -733,7 +457,7 @@ export default function App() {
           >
             <div>
               <strong style={{ fontSize: 13, color: "#1e40af" }}>
-                Do you want to record: {startPrompt.title ?? startPrompt.event?.title ?? "Upcoming Meeting"}?
+                Do you want to record: {startPrompt.event.title ?? "Upcoming Meeting"}?
               </strong>
               {autoStartCountdown != null && (
                 <span style={{ fontSize: 12, color: "#3b82f6", display: "block" }}>
@@ -743,7 +467,7 @@ export default function App() {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button
-                onClick={() => handleCalendarStartDecision("record")}
+                onClick={() => handleCalendarStartDecision("start")}
                 style={{
                   background: "#2563eb",
                   color: "#ffffff",
@@ -788,7 +512,7 @@ export default function App() {
             }}
           >
             <strong style={{ fontSize: 13, color: "#1e40af" }}>
-              Meeting scheduled to end: {endPrompt.title ?? endPrompt.event?.title ?? "Meeting"}
+              Meeting scheduled to end: {endPrompt.event.title ?? "Meeting"}
             </strong>
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -804,10 +528,10 @@ export default function App() {
                   cursor: "pointer"
                 }}
               >
-                Finish & summarize
+                Finish meeting{endCountdown != null ? ` (${endCountdown}s)` : ""}
               </button>
               <button
-                onClick={() => handleCalendarEndDecision("extend15")}
+                onClick={() => handleCalendarEndDecision("extend")}
                 style={{
                   background: "#ffffff",
                   border: "1px solid #bfdbfe",
@@ -832,6 +556,7 @@ export default function App() {
               selectedId={selectedNoteId}
               onSelectNote={setSelectedNoteId}
               onUpdateNotes={setNotes}
+              onRefreshNotes={() => mainController.refreshNotes()}
               onOpenMeeting={(meetingId) => {
                 setSection("meetings");
                 setSelectedMeetingId(meetingId);
@@ -855,21 +580,26 @@ export default function App() {
 
           {section === "calendar" && (
             <SettingsView
+              key="calendar"
+              initialSection="calendar"
+              inputs={inputs}
               settings={settings}
               calendarEvents={calendarEvents}
               onUpdateSettings={handleUpdateSettings}
-              onRefreshCalendar={() => calendarRefresh().then(setCalendarEvents)}
+              onRefreshCalendar={() => { void mainController.refreshCalendar().catch(mainController.error); }}
               onRevealFlowbar={handleRevealFlowbar}
             />
           )}
 
           {section === "settings" && (
             <SettingsView
+              key="settings"
+              inputs={inputs}
               settings={settings}
               calendarEvents={calendarEvents}
               onUpdateSettings={handleUpdateSettings}
-              onRefreshCalendar={() => calendarRefresh().then(setCalendarEvents)}
-              onClearNotesHistory={() => setNotes([])}
+              onRefreshCalendar={() => { void mainController.refreshCalendar().catch(mainController.error); }}
+              onClearNotesHistory={() => { void mainController.clearNotes().catch(mainController.error); }}
               onRevealFlowbar={handleRevealFlowbar}
             />
           )}

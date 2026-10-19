@@ -14,8 +14,9 @@ import {
   Trash2,
   Volume2
 } from "lucide-react";
-import { saveSettings } from "../../api/parity";
 import type { CalendarEvent, ParitySettings } from "../../api/parityTypes";
+import type { AudioInput } from "../../types";
+import { ProvidersSettings } from "./ProvidersSettings";
 import { CalendarSettings } from "./CalendarSettings";
 import { PersonalizationSettings } from "./PersonalizationSettings";
 import { ShortcutsSettings } from "./ShortcutsSettings";
@@ -27,6 +28,8 @@ interface SettingsViewProps {
   onRefreshCalendar?: () => void;
   onClearNotesHistory?: () => void;
   onRevealFlowbar?: () => void;
+  inputs?: AudioInput[];
+  initialSection?: "general" | "calendar";
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -35,11 +38,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onUpdateSettings,
   onRefreshCalendar,
   onClearNotesHistory,
-  onRevealFlowbar
+  onRevealFlowbar,
+  inputs = [],
+  initialSection = "general"
 }) => {
   const [section, setSection] = useState<
-    "general" | "shortcuts" | "personalize" | "calendar" | "privacy"
-  >("general");
+    "general" | "providers" | "shortcuts" | "personalize" | "calendar" | "privacy"
+  >(initialSection);
 
   const updateSetting = <K extends keyof ParitySettings>(
     key: K,
@@ -47,7 +52,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   ) => {
     const next = { ...settings, [key]: val };
     onUpdateSettings(next);
-    saveSettings(next).catch(console.error);
   };
 
   return (
@@ -70,6 +74,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         {[
           { id: "general", label: "General", icon: Sliders },
+          { id: "providers", label: "Providers & Audio", icon: Mic },
           { id: "shortcuts", label: "Shortcuts", icon: Command },
           { id: "personalize", label: "Personalization", icon: Sparkles },
           { id: "calendar", label: "Calendar", icon: CalendarDays },
@@ -203,7 +208,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       flowbarPlacement: null
                     };
                     onUpdateSettings(next);
-                    saveSettings(next).catch(console.error);
                   }}
                   style={{
                     padding: "5px 10px",
@@ -291,6 +295,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
+        {section === "providers" && <ProvidersSettings settings={settings} inputs={inputs} onUpdateSettings={onUpdateSettings} />}
         {section === "shortcuts" && (
           <ShortcutsSettings settings={settings} onUpdateSettings={onUpdateSettings} />
         )}

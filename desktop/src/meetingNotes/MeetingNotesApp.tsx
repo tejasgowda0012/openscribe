@@ -1,136 +1,84 @@
 import React, { useEffect, useRef, useState } from "react";
-import { getCurrentWindow, Window } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import {
-  Camera,
-  Check,
-  ExternalLink,
-  FileText,
-  Mic,
-  Volume2
-} from "lucide-react";
-import {
-  attachmentPath,
-  listMeetings,
-  parityEvents,
-  takeScreenshot,
-  updateMeeting
-} from "../api/parity";
+import { Camera, ExternalLink } from "lucide-react";
+import { attachmentPath, listMeetings, loadProfile, parityEvents, updateMeeting } from "../api/parity";
 import type { MeetingRecord, NoteCapture } from "../api/parityTypes";
-import {
-  formatDuration,
-  formatTimestamp,
-  groupTranscriptPassages
-} from "../views/meetings/transcriptHelpers";
+import { ListenerScope } from "../listeners";
+import { reportUiError, sendIntent } from "../workspaceEvents";
+import { formatDuration, formatTimestamp, groupTranscriptPassages } from "../views/meetings/transcriptHelpers";
 
 export const MeetingNotesApp: React.FC = () => {
   const [record, setRecord] = useState<MeetingRecord | null>(null);
   const [tab, setTab] = useState<"notes" | "transcript">("notes");
   const [notes, setNotes] = useState("");
   const [elapsed, setElapsed] = useState(0);
+  const [notice, setNotice] = useState("");
   const [screenshotPaths, setScreenshotPaths] = useState<Record<string, string>>({});
-  const saveTimeoutRef = useRef<number | null>(null);
+  const recordRef = useRef<MeetingRecord | null>(null);
+  const notesRef = useRef("");
+  const dirtyRef = useRef(false);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const writes = useRef<Promise<unknown>>(Promise.resolve());
   const transcriptEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    // Find active meeting or most recent
-    listMeetings().then((all) => {
-      const active = all.find((m) => m.status === "recording" || m.status === "paused");
-      const target = active ?? all[0] ?? null;
-      if (target) {
-        setRecord(target);
-        setNotes(target.userNotes ?? "");
-        setElapsed(target.duration);
-      }
-    }).catch(console.error);
-
-    const unlistens: Array<() => void> = [];
-
-    parityEvents.onMeetingChanged((updated) => {
-      setRecord((curr) => {
-        if (!curr || curr.id === updated.id) {
-          if (!saveTimeoutRef.current) {
-            setNotes(updated.userNotes ?? "");
-          }
-          setElapsed(updated.duration);
-          return updated;
-        }
-        return curr;
-      });
-    }).then((u) => unlistens.push(u));
-
-    const interval = window.setInterval(() => {
-      setRecord((curr) => {
-        if (curr && curr.status === "recording") {
-          setElapsed((prev) => prev + 1);
-        }
-        return curr;
-      });
-    }, 1000);
-
-    return () => {
-      unlistens.forEach((u) => u());
-      window.clearInterval(interval);
-    };
-  }, []);
-
-  // Debounced notes persistence
-  const handleNotesChange = (text: string) => {
-    setNotes(text);
-    if (saveTimeoutRef.current) {
-      window.clearTimeout(saveTimeoutRef.current);
-    }
-    saveTimeoutRef.current = window.setTimeout(() => {
-      saveTimeoutRef.current = null;
-      if (record) {
-        updateMeeting({ ...record, userNotes: text }).catch(console.error);
-      }
-    }, 400);
+  const showError = (error: unknown) => { setNotice(String(error)); reportUiError(error); };
+  const persistNotes = async () => {
+    if (saveTimeoutRef.current) { clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = null; }
+    const current = recordRef.current, text = notesRef.current;
+    if (!current || !dirtyRef.current) { await writes.current; return; }
+    const write = writes.current.catch(() => undefined).then(() => updateMeeting({ ...current, userNotes: text }));
+    writes.current = write;
+    await write;
+    if (recordRef.current?.id === current.id && notesRef.current === text) dirtyRef.current = false;
+    setNotice("");
   };
-
-  const handleTakeScreenshot = async () => {
-    try {
-      const cap = await takeScreenshot("area");
-      if (cap?.attachment) {
-        try {
-          const path = await attachmentPath(cap.attachment);
-          setScreenshotPaths((prev) => ({ ...prev, [cap.attachment!]: convertFileSrc(path) }));
-        } catch {
-          // Fallback
-        }
-      }
-    } catch (err) {
-      console.warn("Screenshot error:", err);
-    }
-  };
-
-  const openFullMeeting = async () => {
-    try {
-      const main = await Window.getByLabel("main");
-      if (main) {
-        await main.show();
-        await main.setFocus();
-      }
-      // Hide this notes window
-      const win = getCurrentWindow();
-      await win.hide();
-    } catch (err) {
-      console.warn(err);
-    }
-  };
-
   const handleDone = async () => {
-    // Flush notes
-    if (saveTimeoutRef.current) {
-      window.clearTimeout(saveTimeoutRef.current);
-      saveTimeoutRef.current = null;
-    }
-    if (record) {
-      await updateMeeting({ ...record, userNotes: notes }).catch(console.error);
-    }
-    // Closing keeps recording alive! Only hides this floating panel.
-    const win = getCurrentWindow();
-    await win.hide();
+    try { await persistNotes(); await getCurrentWindow().hide(); }
+    catch (error) { showError(error); }
+  };
+  const showCapture = async (capture: NoteCapture) => {
+    if (!capture.attachment || capture.meetingID !== recordRef.current?.id) return;
+    const path = await attachmentPath(capture.attachment);
+    setScreenshotPaths(current => ({ ...current, [capture.attachment!]: convertFileSrc(path) }));
+  };
+  useEffect(() => {
+    const scope = new ListenerScope(); let active = true;
+    const accept = (updated: MeetingRecord) => {
+      const current = recordRef.current;
+      if (current && current.id !== updated.id && updated.status !== "recording" && updated.status !== "paused") return;
+      if (current?.id !== updated.id) {
+        if (dirtyRef.current) { void persistNotes().catch(showError); }
+        dirtyRef.current = false; setScreenshotPaths({});
+      }
+      recordRef.current = updated; setRecord(updated); setElapsed(updated.duration);
+      if (!dirtyRef.current) { notesRef.current = updated.userNotes ?? ""; setNotes(notesRef.current); }
+    };
+    scope.add(parityEvents.onMeetingChanged(accept), showError);
+    void listMeetings().then(all => { if (!active || recordRef.current) return; const target = all.find(m => m.status === "recording" || m.status === "paused") ?? all[0]; if (target) accept(target); }).catch(showError);
+    scope.add(listen<NoteCapture>("capture://added", event => { void showCapture(event.payload).catch(showError); }), showError);
+    scope.add(listen<NoteCapture>("workspace://screenshot", event => { void showCapture(event.payload).catch(showError); }), showError);
+    scope.add(getCurrentWindow().onCloseRequested(event => { event.preventDefault(); void handleDone(); }), showError);
+    const interval = setInterval(() => { if (recordRef.current?.status === "recording") setElapsed(value => value + 1); }, 1000);
+    return () => { active = false; scope.dispose(); clearInterval(interval); if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); void persistNotes().catch(showError); };
+  }, []);
+  useEffect(() => {
+    let active = true;
+    void loadProfile().then(profile => {
+      if (!active) return;
+      for (const note of profile.notes) for (const capture of note.captures ?? []) void showCapture(capture).catch(showError);
+    }).catch(showError);
+    return () => { active = false; };
+  }, [record?.id]);
+  const handleNotesChange = (text: string) => {
+    notesRef.current = text; dirtyRef.current = true; setNotes(text);
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => { void persistNotes().catch(showError); }, 400);
+  };
+  const handleTakeScreenshot = () => { void sendIntent({ action: "screenshot", kind: "area" }).catch(showError); };
+  const openFullMeeting = async () => {
+    try { await persistNotes(); await sendIntent({ action: "open", section: "meetings", meetingId: recordRef.current?.id }); await getCurrentWindow().hide(); }
+    catch (error) { showError(error); }
   };
 
   const passages = record ? groupTranscriptPassages(record.segments) : [];
@@ -147,6 +95,7 @@ export const MeetingNotesApp: React.FC = () => {
         fontFamily: "inherit"
       }}
     >
+      {notice && <div role="alert" style={{ padding: 12, background: "#fee2e2", color: "#991b1b" }}>{notice}</div>}
       {/* Header */}
       <header
         style={{

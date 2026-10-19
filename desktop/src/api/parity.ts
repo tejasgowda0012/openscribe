@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { CalendarPrompt, CalendarDecision } from "../core/calendarPolicy";
 import type {
   CalendarEvent,
   MeetingRecord,
@@ -137,14 +138,14 @@ export async function registerShortcuts(
 }
 
 export async function suspendShortcuts(suspended: boolean): Promise<void> {
-  return invoke<void>("suspend_shortcuts", { suspended, bool: suspended });
+  return invoke<void>("suspend_shortcuts", { suspended });
 }
 
 export async function calendarRefresh(): Promise<CalendarEvent[]> {
   return invoke<CalendarEvent[]>("calendar_refresh");
 }
 
-export type CalendarDecision = "record" | "skip" | "extend15" | "finish";
+export type { CalendarDecision } from "../core/calendarPolicy";
 
 export async function calendarDecision(
   occurrenceId: string,
@@ -181,18 +182,8 @@ export interface ShortcutActionEvent {
   state: "pressed" | "released";
 }
 
-export interface CalendarPromptStartEvent {
-  event: CalendarEvent;
-  occurrenceId?: string;
-  title?: string;
-  autoStartInSeconds?: number;
-}
-
-export interface CalendarPromptEndEvent {
-  event: CalendarEvent;
-  occurrenceId?: string;
-  title?: string;
-}
+export type CalendarPromptStartEvent = CalendarPrompt;
+export type CalendarPromptEndEvent = CalendarPrompt;
 
 export interface OcrEvent {
   captureId: string;
@@ -221,6 +212,12 @@ export const parityEvents = {
   },
   onCalendarPromptEnd(handler: (payload: CalendarPromptEndEvent) => void): Promise<UnlistenFn> {
     return listen<CalendarPromptEndEvent>("calendar://prompt-end", (event) => handler(event.payload));
+  },
+  onCalendarPromptClosed(handler: (payload: { occurrenceId: string; kind: "start" | "end" }) => void): Promise<UnlistenFn> {
+    return listen<{ occurrenceId: string; kind: "start" | "end" }>("calendar://prompt-closed", event => handler(event.payload));
+  },
+  onCalendarError(handler: (message: string) => void): Promise<UnlistenFn> {
+    return listen<string>("calendar://error", event => handler(event.payload));
   },
   onCaptureOcr(handler: (payload: OcrEvent) => void): Promise<UnlistenFn> {
     return listen<OcrEvent>("capture://ocr", (event) => handler(event.payload));
