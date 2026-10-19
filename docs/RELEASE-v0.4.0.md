@@ -1,33 +1,34 @@
-# OpenScribe Desktop v0.4.0
+OpenScribe v0.4.0 rebuilds the native Mac workspace around a persistent note library, a focused editor, and simpler provider setup.
 
-OpenScribe is now available as a native desktop application for Windows and Linux. The existing Swift edition for macOS is unchanged and outside this release.
+### What's new
 
-## Included
+- Browse and edit notes side by side. Titles, previews, search, date groups, and pinned notes keep the library easy to scan.
+- Create a note with Command-N and start typing immediately. Notes save automatically; abandoned empty drafts do not create history entries. Original dictation transcripts remain available separately.
+- Configure a provider, API key, model, and server address in one screen. Browsing and cancelling preserve the active connection. Save activates a connection only after its settings reach disk.
+- Use focused add/edit forms for dictionary corrections, vocabulary, snippets, and app-specific writing styles.
+- Navigate settings from the sidebar. System, Light, and Dark appearances use warm neutrals, graphite, and restrained amber accents.
+- Open recording controls and recent notes from the menu bar. The Flowbar shows recording time, stop/cancel controls, processing state, and save feedback.
+- Launch at login through macOS Login Items, with approval status shown in General settings.
+- Guided first-run setup connects a transcription provider, explains permissions, and offers a practice note. Notes-only mode does not require Accessibility access.
 
-- Guided provider and microphone setup with a safe practice recording.
-- Local, searchable notes with editing, tags, copy, raw transcript preservation, and optional source-audio retention.
-- Global shortcut dictation and clipboard-preserving paste into the focused application.
-- OpenAI, OpenRouter, Groq, Mistral, Deepgram, AssemblyAI, Anthropic, Gemini, and custom compatible provider routing.
-- Secure provider keys through the operating system credential store.
-- Optional cleanup strength, writing tone, vocabulary, exact correction rules, and whole-utterance voice snippets.
-- Meeting recording from a selected microphone or OS loopback/monitor source, with transcript and optional summary.
-- Local ICS calendar import for Outlook, Google Calendar, and CalDAV exports.
-- Friendly user notices that keep raw provider diagnostics behind Details.
-- Retry or discard recovery for recordings interrupted by a provider or network failure.
-- Paper and dark themes using the same warm, focused OpenScribe visual language.
+### Reliability
 
-## Downloads
+- Unreadable history and settings are backed up before new files replace them. Failed reads or backups block writes to protect the original data.
+- Save failures remain visible and can be retried. Clearing an edited note preserves the original transcript.
+- Microphone startup and teardown translate audio-engine exceptions into recoverable errors.
+- Recording recovery retains audio after interruption or transcription failure. Provider diagnostics stay in Details, with concise error messages in the workspace.
+- Existing notes, settings, provider keys, and meeting recordings keep their compatible local storage paths.
 
-- Windows x64: NSIS setup executable or MSI installer.
-- Linux x64: AppImage or Debian package.
-- Linux ARM64: AppImage or Debian package.
+### Install
 
-The GitHub workflow creates a draft release first. Test each generated installer on a clean machine before publishing the draft.
+Download the DMG for the app and installer, or the ZIP for the app alone. Quit OpenScribe after finishing any recording, then install the new app in Applications. SHA-256 checksums are included in SHA256SUMS.txt.
 
-## Platform notes
+Requirements: Apple silicon Mac running macOS 14 or later. This release is code-signed with an Apple Development identity and is not notarized. Downloaded copies may need macOS approval before opening; local signing guidance is available in the [v0.2.0 release notes](https://github.com/shashankanil/openscribe/releases/tag/v0.2.0).
 
-- Windows system audio requires Stereo Mix or another loopback capture input.
-- Linux system audio requires a PipeWire/Pulse monitor source and desktop support for global shortcuts/input injection. Wayland compositors may require explicit permission or an XWayland session for automatic paste.
-- Calendar support is ICS import rather than native account aggregation.
-- This first cross-platform release processes audio after the recording stops. The macOS edition's provider-specific low-latency streaming is not yet enabled in this shell.
-- Windows signing credentials are not configured in the repository. Unsigned test builds will show Microsoft SmartScreen warnings.
+Provider API keys are required for transcription and optional writing cleanup. Keys remain in a permission-restricted local file, not Keychain. Calendar access is read-only. Audio sources distinguish microphone and system audio, not individual speakers.
+
+### Validation
+
+77 automated tests pass in the release configuration, covering capture and recovery, credential isolation, connection validation and cancellation behavior, draft persistence, failed-save recovery, original transcripts, calendar and streaming behavior, and both-appearance rendering.
+
+Native UI checks verify note editing, autosave across navigation and relaunch, Command-N focus, empty-draft cleanup, provider cancellation, and correction forms. Hardware disconnects and live provider recording are not part of the automated validation.

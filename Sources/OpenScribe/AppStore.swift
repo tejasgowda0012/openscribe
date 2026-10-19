@@ -4,33 +4,57 @@ import Foundation
 @MainActor
 final class AppStore: ObservableObject {
     @Published var settings: AppSettings {
-        didSet { persistSettings() }
+        didSet { if !settingsAlreadyPersisted { persistSettings() } }
     }
     @Published private(set) var notes: [VoiceNote] {
         didSet { persistNotes() }
     }
+    @Published private(set) var storageError: String?
 
     private let rootURL: URL
     private let settingsURL: URL
     private let notesURL: URL
+    private var blockedFiles = Set<URL>()
+    private var loadNotices: [String] = []
+    private var writeFailures: [URL: String] = [:]
+    private var lastNotesWriteSucceeded = true
+    private var settingsAlreadyPersisted = false
 
     init(rootURL overrideRootURL: URL? = nil) {
         let appRoot = overrideRootURL ?? AppPaths.root
         rootURL = appRoot
         settingsURL = appRoot.appendingPathComponent("settings.json")
         notesURL = appRoot.appendingPathComponent("notes.json")
-        let loadedSettings = AppStore.read(AppSettings.self, from: settingsURL)
-        settings = loadedSettings ?? AppSettings()
-        notes = AppStore.read([VoiceNote].self, from: notesURL) ?? []
+        let loadedSettings = Self.load(AppSettings.self, from: settingsURL)
+        let loadedNotes = Self.load([VoiceNote].self, from: notesURL)
+        settings = loadedSettings.value ?? AppSettings()
+        notes = loadedNotes.value ?? []
+        for (url, result) in [(settingsURL, (loadedSettings.notice, loadedSettings.blocked)),
+                              (notesURL, (loadedNotes.notice, loadedNotes.blocked))] {
+            if let notice = result.0 { loadNotices.append(notice) }
+            if result.1 { blockedFiles.insert(url) }
+        }
+        storageError = loadNotices.isEmpty ? nil : loadNotices.joined(separator: "\n\n")
         try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        if let loadedSettings, loadedSettings != settings {
-            Self.write(settings, to: settingsURL)
-        } else if !FileManager.default.fileExists(atPath: settingsURL.path) {
-            Self.write(settings, to: settingsURL)
-        }
+        if !FileManager.default.fileExists(atPath: settingsURL.path) { persistSettings() }
         if !FileManager.default.fileExists(atPath: notesURL.path) {
-            Self.write(notes, to: notesURL)
+            persistNotes()
         }
+        groupExistingDictations()
+        migrateEditedDayNotes()
+    }
+
+    private func migrateEditedDayNotes() {
+        guard notes.contains(where: { $0.isDailyNote && $0.editedText != nil }), !blockedFiles.contains(notesURL) else { return }
+        let backup = rootURL.appendingPathComponent("notes-before-day-timeline-\(UUID()).json")
+        do { try FileManager.default.copyItem(at: notesURL, to: backup) }
+        catch {
+            blockedFiles.insert(notesURL)
+            loadNotices.append("Could not back up note history before updating day notes. Saving is blocked to protect the original data.\n\n\(error.localizedDescription)")
+            refreshStorageError()
+            return
+        }
+        notes = notes.map { $0.migratedToTimeline() }
     }
 
     func updateSpeechProvider(_ provider: SpeechProvider) {
@@ -45,6 +69,15 @@ final class AppStore: ObservableObject {
         settings.languageModel = provider.defaultModel
     }
 
+    /// A connection becomes active only after its configuration reaches disk.
+    func saveSettings(_ updated: AppSettings) -> Bool {
+        guard persist(updated, to: settingsURL) else { return false }
+        settingsAlreadyPersisted = true
+        settings = updated
+        settingsAlreadyPersisted = false
+        return true
+    }
+
     @discardableResult
     func addNote(
         id: UUID = UUID(),
@@ -56,12 +89,16 @@ final class AppStore: ObservableObject {
         sourceApplication: String? = nil,
         sourceBundleIdentifier: String? = nil
     ) -> VoiceNote {
+        // Recovery retries refer to a capture ID, even after it joins a daily note.
+        if let saved = notes.first(where: { $0.id == id || $0.captures?.contains(where: { $0.id == id }) == true }) {
+            persistNotes()
+            return saved
+        }
         let text = cleanedText.isEmpty ? rawText : cleanedText
         let title = Self.makeTitle(from: text)
-        let existing = notes.first { $0.id == id }
         var note = VoiceNote(
             id: id,
-            createdAt: existing?.createdAt ?? createdAt,
+            createdAt: createdAt,
             title: title,
             rawText: rawText,
             cleanedText: cleanedText,
@@ -70,26 +107,112 @@ final class AppStore: ObservableObject {
             sourceApplication: sourceApplication,
             sourceBundleIdentifier: sourceBundleIdentifier
         )
-        note.isPinned = existing?.isPinned ?? false
-        note.tags = existing?.tags ?? []
-        if let index = notes.firstIndex(where: { $0.id == id }) { notes[index] = note }
-        else { notes.insert(note, at: 0) }
+        if source == "Dictation" {
+            var capture = note.asCapture
+            capture.kind = .dictation
+            return addCapture(capture)
+        }
+        notes = (notes + [note]).sorted { $0.lastCapturedAt > $1.lastCapturedAt }
         return note
+    }
+
+    /// Every capture of a day (dictations, screenshots, meetings, written entries) joins that day's note.
+    @discardableResult
+    func addCapture(_ capture: NoteCapture) -> VoiceNote {
+        var updated = notes
+        var note: VoiceNote
+        if let index = notes.firstIndex(where: { $0.isDailyNote && Calendar.current.isDate($0.createdAt, inSameDayAs: capture.createdAt) }) {
+            note = notes[index]
+            note.appendCaptures([capture])
+            updated.remove(at: index)
+        } else {
+            // The first capture's ID names the day, so a retried capture finds the note it created.
+            note = VoiceNote(id: capture.id, createdAt: capture.createdAt, title: Self.dayTitle(capture.createdAt), rawText: "",
+                             cleanedText: "", duration: 0, source: "Dictation")
+            note.captures = []
+            note.appendCaptures([capture])
+        }
+        notes = (updated + [note]).sorted { $0.lastCapturedAt > $1.lastCapturedAt }
+        return note
+    }
+
+    func dayNote(for date: Date) -> VoiceNote? {
+        notes.first { $0.isDailyNote && Calendar.current.isDate($0.createdAt, inSameDayAs: date) }
+    }
+
+    @discardableResult
+    func updateCapture(_ capture: NoteCapture, in noteID: UUID) -> Bool {
+        guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return false }
+        var note = notes[index]
+        note.updateCapture(capture)
+        notes[index] = note
+        return lastNotesWriteSucceeded
+    }
+
+    func removeCapture(_ captureID: UUID, from noteID: UUID) {
+        guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return }
+        let removed = notes[index].captures?.first { $0.id == captureID }
+        var note = notes[index]
+        note.removeCapture(captureID)
+        if note.captures?.isEmpty == true { notes.remove(at: index) } else { notes[index] = note }
+        if let removed { deleteAttachment(of: removed) }
+    }
+
+    /// Meetings link into the day they were recorded. Deleting a meeting removes its entry;
+    /// screenshots taken during it stay in the day note, just no longer linked.
+    func removeMeetingEntries(_ meetingID: UUID) {
+        for note in notes where note.captures?.contains(where: { $0.meetingID == meetingID }) == true {
+            for var capture in note.captures ?? [] where capture.meetingID == meetingID {
+                if capture.entryKind == .meeting {
+                    removeCapture(capture.id, from: note.id)
+                } else {
+                    capture.meetingID = nil
+                    updateCapture(capture, in: note.id)
+                }
+            }
+        }
+    }
+
+    /// Screenshots taken while a meeting was running, oldest first.
+    func meetingScreenshots(_ meetingID: UUID) -> [NoteCapture] {
+        notes.flatMap { $0.captures ?? [] }
+            .filter { $0.meetingID == meetingID && $0.entryKind == .screenshot && $0.isVisible }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    var attachmentsURL: URL { rootURL.appendingPathComponent("Attachments", isDirectory: true) }
+
+    func attachmentURL(_ name: String) -> URL { attachmentsURL.appendingPathComponent(name) }
+
+    private func deleteAttachment(of capture: NoteCapture) {
+        guard let name = capture.attachment else { return }
+        try? FileManager.default.removeItem(at: attachmentURL(name))
+    }
+
+    static func dayTitle(_ date: Date) -> String {
+        date.formatted(.dateTime.month(.wide).day().year())
     }
 
     func addManualNote() -> VoiceNote {
-        let note = VoiceNote(title: "Untitled note", rawText: "", cleanedText: "", duration: 0, source: "Note")
-        notes.insert(note, at: 0)
-        return note
+        // Creating an editor is not a history entry. Save once the draft contains something.
+        VoiceNote(title: "", rawText: "", cleanedText: "", duration: 0, source: "Note")
     }
 
-    func updateNote(_ note: VoiceNote) {
-        guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
-        notes[index] = note
+    @discardableResult
+    func updateNote(_ note: VoiceNote) -> Bool {
+        if let index = notes.firstIndex(where: { $0.id == note.id }) {
+            notes[index] = note.mergingNewCaptures(from: notes[index]).migratedToTimeline()
+        } else {
+            guard note.source == "Note", note.hasContent else { return false }
+            notes.insert(note, at: 0)
+        }
+        return lastNotesWriteSucceeded
     }
 
     func deleteNote(_ note: VoiceNote) {
+        let removed = notes.first { $0.id == note.id }
         notes.removeAll { $0.id == note.id }
+        removed?.captures?.forEach(deleteAttachment)
     }
 
     func togglePin(_ note: VoiceNote) {
@@ -104,11 +227,46 @@ final class AppStore: ObservableObject {
     }
 
     func clearNotes() {
+        let removed = notes
         notes.removeAll()
+        removed.flatMap { $0.captures ?? [] }.forEach(deleteAttachment)
     }
 
     func hasPersistedNote(_ id: UUID) -> Bool {
-        Self.read([VoiceNote].self, from: notesURL)?.contains { $0.id == id } ?? false
+        Self.read([VoiceNote].self, from: notesURL)?.contains {
+            $0.id == id || $0.captures?.contains(where: { $0.id == id }) == true
+        } ?? false
+    }
+
+    var latestText: String? { notes.max { $0.lastCapturedAt < $1.lastCapturedAt }?.latestText }
+
+    private func groupExistingDictations() {
+        guard notes.contains(where: { $0.source == "Dictation" && !$0.isDailyNote }), !blockedFiles.contains(notesURL) else { return }
+        // Keep the exact pre-migration history, including custom titles and edited transcripts.
+        let backup = rootURL.appendingPathComponent("notes-before-daily-grouping-\(UUID()).json")
+        do { try FileManager.default.copyItem(at: notesURL, to: backup) }
+        catch {
+            blockedFiles.insert(notesURL)
+            loadNotices.append("Could not back up note history before daily grouping. Saving is blocked to protect the original data.\n\n\(error.localizedDescription)")
+            refreshStorageError()
+            return
+        }
+        var grouped = notes.filter { $0.source != "Dictation" || $0.isDailyNote }
+        for original in notes.filter({ $0.source == "Dictation" && !$0.isDailyNote }).sorted(by: { $0.createdAt < $1.createdAt }) {
+            if let index = grouped.firstIndex(where: { $0.isDailyNote && Calendar.current.isDate($0.createdAt, inSameDayAs: original.createdAt) }) {
+                grouped[index].appendCaptures([original.asCapture])
+                grouped[index].isPinned = grouped[index].isPinned || original.isPinned
+                grouped[index].tags = Array(Set(grouped[index].tags + original.tags)).sorted()
+            } else {
+                var daily = original
+                daily.title = Self.dayTitle(original.createdAt)
+                daily.cleanedText = original.displayText
+                daily.editedText = original.editedText
+                daily.captures = [original.asCapture]
+                grouped.append(daily)
+            }
+        }
+        notes = grouped.sorted { $0.lastCapturedAt > $1.lastCapturedAt }
     }
 
     func flush() {
@@ -117,11 +275,11 @@ final class AppStore: ObservableObject {
     }
 
     private func persistSettings() {
-        Self.write(settings, to: settingsURL)
+        persist(settings, to: settingsURL)
     }
 
     private func persistNotes() {
-        Self.write(notes, to: notesURL)
+        lastNotesWriteSucceeded = persist(notes, to: notesURL)
     }
 
     private static func makeTitle(from text: String) -> String {
@@ -139,14 +297,44 @@ final class AppStore: ObservableObject {
         return try? JSONDecoder.whisperFlow.decode(type, from: data)
     }
 
-    private static func write<T: Encodable>(_ value: T, to url: URL) {
+    /// Preserve unreadable data before allowing a fresh history to be saved over it.
+    private static func load<T: Decodable>(_ type: T.Type, from url: URL) -> (value: T?, notice: String?, blocked: Bool) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return (nil, nil, false) }
+        do {
+            let data = try Data(contentsOf: url)
+            do { return (try JSONDecoder.whisperFlow.decode(type, from: data), nil, false) }
+            catch {
+                let backup = url.deletingLastPathComponent().appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)-unreadable-\(UUID().uuidString).json")
+                try data.write(to: backup, options: .atomic)
+                return (nil, "Could not load \(url.lastPathComponent). The original file was preserved as \(backup.lastPathComponent). New changes will use a fresh file.", false)
+            }
+        } catch {
+            return (nil, "Could not read or back up \(url.lastPathComponent). Saving to that file is blocked to protect your data.\n\n\(error.localizedDescription)", true)
+        }
+    }
+
+    @discardableResult
+    private func persist<T: Encodable>(_ value: T, to url: URL) -> Bool {
+        guard !blockedFiles.contains(url) else { return false }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent())
             let data = try JSONEncoder.whisperFlow.encode(value)
             try data.write(to: url, options: .atomic)
+            writeFailures.removeValue(forKey: url)
+            refreshStorageError()
+            return true
         } catch {
             NSLog("OpenScribe persistence error: %@", error.localizedDescription)
+            writeFailures[url] = "Could not save \(url.lastPathComponent). Your changes are only in memory.\n\n\(error.localizedDescription)"
+            refreshStorageError()
+            return false
         }
+    }
+
+    private func refreshStorageError() {
+        let messages = loadNotices + writeFailures.keys.sorted(by: { $0.path < $1.path }).compactMap { writeFailures[$0] }
+        let next = messages.isEmpty ? nil : messages.joined(separator: "\n\n")
+        if storageError != next { storageError = next }
     }
 }
 

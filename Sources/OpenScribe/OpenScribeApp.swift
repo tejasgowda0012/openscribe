@@ -84,10 +84,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 else { AppController.shared.showOnboarding() }
             }
         }
-        NSApp.setActivationPolicy(.accessory)
+        // Show in the Dock and app switcher. Info.plist keeps LSUIElement so maintenance launches stay invisible.
+        NSApp.setActivationPolicy(.regular)
         AppController.shared.boot()
         statusBarController = StatusBarController(controller: .shared)
         if CommandLine.arguments.contains("--show-workspace") { AppController.shared.openMainWindow() }
+        #if DEBUG
+        if CommandLine.arguments.contains("--show-quick-panel") { statusBarController?.showQuickPanel() }
+        #endif
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

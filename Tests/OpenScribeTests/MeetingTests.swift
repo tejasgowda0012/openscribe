@@ -19,6 +19,18 @@ final class MeetingTests: XCTestCase {
         return try store.audioChunks(for: record.id)
     }
 
+    func testOlderMeetingsLoadWithoutNewLabelsAndOptions() throws {
+        let record = MeetingRecord(title: "Legacy meeting", settings: AppSettings())
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
+        for key in ["microphoneLabel", "systemLabel", "liveTranscription", "summarizeOnStop"] { object.removeValue(forKey: key) }
+        let restored = try JSONDecoder().decode(MeetingRecord.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(restored.id, record.id)
+        XCTAssertEqual(restored.microphoneLabel, "Microphone")
+        XCTAssertEqual(restored.systemLabel, "System audio")
+        XCTAssertTrue(restored.summarizeOnStop)
+        XCTAssertNil(restored.liveTranscription)
+    }
+
     func testRestartRecoversTimelineAndCompletedSegments() throws {
         let root = root()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -156,10 +168,20 @@ final class MeetingTests: XCTestCase {
         let controller = MeetingController(store: store, speechKey: { "test" }, languageKey: { "test" })
         controller.process(record.id)
         await controller.waitUntilIdle()
-        let result = try XCTUnwrap(store.record(record.id))
-        XCTAssertEqual(result.status, .ready)
-        XCTAssertEqual(result.segments.count, 2)
+        // A few words aren't summarized until the user confirms; it may have been started by mistake.
+        let transcribed = try XCTUnwrap(store.record(record.id))
+        XCTAssertEqual(transcribed.status, .ready)
+        XCTAssertEqual(transcribed.segments.count, 2)
         XCTAssertEqual(MeetingURLProtocol.uploads, 1)
+        XCTAssertNil(transcribed.summary)
+        XCTAssertEqual(transcribed.summaryNeedsConfirmation, true)
+        XCTAssertEqual(controller.shortMeeting, record.id)
+
+        controller.summarizeShortMeeting(record.id)
+        await controller.waitUntilIdle()
+        let result = try XCTUnwrap(store.record(record.id))
+        XCTAssertNil(controller.shortMeeting)
+        XCTAssertNil(result.summaryNeedsConfirmation)
         XCTAssertTrue(result.markdown.contains("Ship Friday [00:00]"))
         XCTAssertEqual(MeetingStore(root: root).record(record.id)?.status, .ready)
     }

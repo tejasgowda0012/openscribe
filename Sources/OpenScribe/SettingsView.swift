@@ -3,367 +3,284 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var controller: AppController
-    @State private var personalizationTab = "Dictionary"
     @State private var microphones: [MicrophoneDevice] = []
-    @State private var correctionHeard = ""
-    @State private var correctionReplacement = ""
-    @State private var snippetTrigger = ""
-    @State private var snippetReplacement = ""
-    @State private var appBundleID = ""
-    @State private var appTone: WritingTone = .natural
     @State private var showClearConfirmation = false
     var section: WorkspaceSection = .general
-    @State private var recordingShortcut = false
+    @State private var recordingAction: ShortcutAction?
 
     var body: some View {
-        Group {
-            switch section {
-            case .calendar: CalendarSettingsView(app: controller, calendar: controller.calendar)
-            case .speech: speechTab
-            case .cleanup: languageModelTab
-            case .personalize: shortcutsTab
-            case .privacy: privacyTab
-            default: generalTab
+        VStack(alignment: .leading, spacing: 0) {
+            FlowPageHeader(title: section.isSettings ? section.title : "General", subtitle: sectionSubtitle)
+                .padding(.horizontal, 32).padding(.top, 28).padding(.bottom, 6)
+            Group {
+                switch section {
+                case .connections: connectionsTab
+                case .personalize: personalizationTab
+                case .shortcuts: shortcutsTab
+                case .privacy: privacyTab
+                case .permissions: PermissionsView(controller: controller)
+                default: generalTab
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(FlowTheme.paperMuted)
+        .background(FlowTheme.background)
         .task { microphones = MicrophoneDevice.available() }
-        .onChange(of: section) { _, _ in recordingShortcut = false }
+        .onChange(of: section) { _, _ in recordingAction = nil }
+        .onChange(of: recordingAction) { _, action in controller.setShortcutCaptureActive(action != nil) }
+        .onDisappear { controller.setShortcutCaptureActive(false) }
+        .onChange(of: controller.workspaceSection) { _, next in
+            if next != .shortcuts { recordingAction = nil }
+        }
         .alert("Delete all notes?", isPresented: $showClearConfirmation) {
-            Button("Delete all", role: .destructive) { controller.clearNotes() }
+            Button("Delete all", role: .destructive) { controller.clearNotes(); controller.flash("Note history deleted") }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes the local note history. Provider credentials are stored in the app's private credentials file.")
+            Text("This permanently removes your local notes. Meetings and provider keys are kept.")
         }
     }
-
-    // MARK: - General
 
     private var generalTab: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                SettingsCard(
-                    eyebrow: "GENERAL",
-                    title: "Appearance"
-                ) {
-                    Picker("Theme", selection: settingBinding(\.theme)) {
-                        ForEach(FlowThemeVariant.allCases) { theme in
-                            Text(theme.title).tag(theme)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    Text(controller.settings.theme.detail)
-                        .flowUIFont(size: 11)
-                        .foregroundStyle(FlowTheme.inkMuted)
-
-                }
-                SettingsCard(eyebrow: "", title: "Recording & shortcut") {
-                    Picker("Microphone", selection: settingBinding(\.microphoneDeviceUID)) {
-                        Text("System default").tag("")
-                        ForEach(microphones) { Text($0.name).tag($0.id) }
-                        if !controller.settings.microphoneDeviceUID.isEmpty && !microphones.contains(where: { $0.id == controller.settings.microphoneDeviceUID }) {
-                            Text("Selected microphone unavailable").tag(controller.settings.microphoneDeviceUID)
-                        }
-                    }
-                    Button("Refresh microphones") { microphones = MicrophoneDevice.available() }
-                        .buttonStyle(FlowQuietButtonStyle())
-
-                    Picker("Dictation mode", selection: settingBinding(\.dictationMode)) {
-                        ForEach(DictationMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-
-                    Text(controller.settings.dictationMode.detail)
-                        .flowUIFont(size: 11)
-                        .foregroundStyle(FlowTheme.inkMuted)
-
+            VStack(alignment: .leading, spacing: 22) {
+                FlowSettingsGroup(title: "Appearance") {
                     HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Global shortcut")
-                                .flowUIFont(size: 13, weight: .semibold)
-                            Text(recordingShortcut ? "Press a key combination, or press Globe." : "Use any modifier plus a key.")
-                                .flowUIFont(size: 10)
-                                .foregroundStyle(FlowTheme.inkMuted)
+                        ForEach(FlowThemeVariant.allCases) { theme in
+                            ThemeChoice(theme: theme, selected: controller.settings.theme == theme) {
+                                controller.updateSettings { $0.theme = theme }
+                            }
                         }
-                        Spacer()
-                        if !recordingShortcut {
-                            Text(controller.settings.shortcutDisplay)
-                                .flowUIFont(size: 14, weight: .semibold)
-                                .flowPill()
-                        }
-                        Button("Use Globe") {
-                            controller.updateShortcut(
-                                keyCode: 63,
-                                modifiers: .function,
-                                display: "Globe"
-                            )
-                            recordingShortcut = false
-                        }
-                        .buttonStyle(FlowQuietButtonStyle())
-                        Button(recordingShortcut ? "Cancel" : "Change") {
-                            recordingShortcut.toggle()
-                        }
-                        .buttonStyle(FlowQuietButtonStyle())
-                    }
-
-                    HotkeyCaptureView(isRecording: $recordingShortcut) { keyCode, modifiers, display in
-                        controller.updateShortcut(keyCode: keyCode, modifiers: modifiers, display: display)
-                        recordingShortcut = false
-                    }
-                    .frame(width: 1, height: 1)
-
-                    Toggle("Paste text into the focused app", isOn: settingBinding(\.pasteIntoFocusedApp))
-                        .toggleStyle(.switch)
+                    }.padding(14)
                 }
-                SettingsCard(eyebrow: "", title: "Recording feedback") {
-                    Picker("Flowbar position", selection: settingBinding(\.overlayPosition)) {
-                        Text("Bottom center").tag("bottom-center")
-                        Text("Bottom left").tag("bottom-left")
-                        Text("Bottom right").tag("bottom-right")
+                FlowSettingsGroup(title: "Startup", footer: LoginItem.isAvailable
+                    ? "OpenScribe stays in your menu bar when you log in."
+                    : "Install OpenScribe in Applications to enable launch at login.") {
+                    FlowSettingsRow(title: "Launch at login", detail: "Ready whenever inspiration strikes", symbol: "power") {
+                        Toggle("Launch at login", isOn: Binding(get: { controller.launchAtLogin }, set: { controller.setLaunchAtLogin($0) }))
+                            .labelsHidden().toggleStyle(.switch).disabled(!LoginItem.isAvailable)
                     }
-                    .pickerStyle(.menu)
-
-                    Toggle("Subtle recording sounds", isOn: settingBinding(\.interactionSounds))
-                        .toggleStyle(.switch)
-
-                    Toggle("Show Flowbar when idle", isOn: settingBinding(\.showOverlayWhenIdle))
-                        .toggleStyle(.switch)
-
+                    if controller.loginItemNeedsApproval {
+                        FlowRowDivider()
+                        FlowSettingsRow(title: "Approval needed", detail: "Allow OpenScribe in Login Items.") {
+                            Button("Open System Settings") { LoginItem.openSystemSettings() }.buttonStyle(.flowSecondary)
+                        }
+                    }
+                }
+                FlowSettingsGroup(title: "Recording") {
+                    FlowSettingsRow(title: "Microphone", symbol: "mic") {
+                        Picker("Microphone", selection: settingBinding(\.microphoneDeviceUID)) {
+                            Text("System default").tag("")
+                            ForEach(microphones) { Text($0.name).tag($0.id) }
+                            if !controller.settings.microphoneDeviceUID.isEmpty && !microphones.contains(where: { $0.id == controller.settings.microphoneDeviceUID }) {
+                                Text("Selected microphone unavailable").tag(controller.settings.microphoneDeviceUID)
+                            }
+                        }.labelsHidden().frame(maxWidth: 230)
+                        FlowIconButton(symbol: "arrow.clockwise", help: "Refresh microphones") { microphones = MicrophoneDevice.available() }
+                    }
+                    FlowRowDivider()
+                    FlowSettingsRow(title: "Shortcuts", detail: "Dictation, meetings, and screenshots from any app", symbol: "command") {
+                        if let hint = controller.settings.dictationHint { FlowKeycaps(shortcut: hint) }
+                        Button("Edit") { controller.workspaceSection = .shortcuts }.buttonStyle(.flowSecondary)
+                    }
+                    FlowRowDivider()
+                    toggleRow("Paste into the focused app", detail: "Recordings started here are saved to Notes.", symbol: "text.cursor", key: \.pasteIntoFocusedApp)
+                }
+                FlowSettingsGroup(title: "Flowbar", footer: "Drag the Flowbar anywhere on screen. It snaps to the center and edges and remembers where you leave it.") {
+                    toggleRow("Keep on screen when idle", detail: "Hover it for dictation, meetings, and screenshots.", symbol: "waveform", key: \.showOverlayWhenIdle)
+                    FlowRowDivider()
+                    FlowSettingsRow(title: "Can’t find it?", symbol: "scope") {
+                        Button("Show me") { controller.revealFlowbar() }.buttonStyle(.flow(.secondary, size: .small))
+                    }
+                    FlowRowDivider()
+                    FlowSettingsRow(title: "Position", symbol: "rectangle.bottomthird.inset.filled") {
+                        Picker("Position", selection: Binding(
+                            get: { controller.settings.flowbarPlacement == nil ? controller.settings.overlayPosition : "custom" },
+                            set: { value in
+                                guard value != "custom" else { return }
+                                controller.updateSettings { $0.overlayPosition = value; $0.flowbarPlacement = nil }
+                            })) {
+                            Text("Bottom center").tag("bottom-center")
+                            Text("Bottom left").tag("bottom-left")
+                            Text("Bottom right").tag("bottom-right")
+                            Text("Top center").tag("top-center")
+                            Text("Top right").tag("top-right")
+                            if controller.settings.flowbarPlacement != nil { Text("Where I placed it").tag("custom") }
+                        }.labelsHidden().frame(width: 180)
+                    }
+                    FlowRowDivider()
+                    toggleRow("Recording sounds", symbol: "speaker.wave.1", key: \.interactionSounds)
+                }
             }
-                }
-            .padding(32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 32).padding(.vertical, 24)
         }
     }
 
-    // MARK: - Speech to Text
+    private func toggleRow(_ title: String, detail: String? = nil, symbol: String, key: WritableKeyPath<AppSettings, Bool>) -> some View {
+        FlowSettingsRow(title: title, detail: detail, symbol: symbol) {
+            Toggle(title, isOn: settingBinding(key)).labelsHidden().toggleStyle(.switch)
+        }
+    }
 
-    private var speechTab: some View {
+    // MARK: - API & Models
+
+    private var connectionsTab: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                settingsHeading("Transcription", subtitle: "Turn your voice into text.")
-                SettingsCard(eyebrow: "", title: "While you speak") {
-                    Toggle(isOn: settingBinding(\.dictationLiveTranscription)) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Start transcribing as I speak").font(.system(size: 13, weight: .medium))
-                            Text("Your text is ready sooner when you stop.").font(.caption).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }.toggleStyle(.switch).accessibilityLabel("Start transcribing as I speak")
-                    HStack(spacing: 8) {
-                        Image(systemName: "waveform").foregroundStyle(FlowTheme.lavenderDeep)
-                        Text(!controller.settings.dictationLiveTranscription ? "Audio is sent after you stop." :
-                             controller.settings.automaticStreaming && StreamingCapability.resolve(controller.settings) != nil ? "Live transcription available" : "Transcribes in 15-second sections")
-                            .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 26) {
+                VStack(alignment: .leading, spacing: 10) {
+                    sectionLabel("Transcription")
+                    ProviderConnectionCard(controller: controller, purpose: .speech)
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    sectionLabel("Writing & summaries")
+                    ProviderConnectionCard(controller: controller, purpose: .languageModel)
+                }
+                Text("Each connection has its own model. When both use the same service, you can reuse your saved API key in connection setup.")
+                    .font(.system(size: 12)).foregroundStyle(FlowTheme.inkMuted).fixedSize(horizontal: false, vertical: true)
+                FlowSettingsGroup(title: "Transcription behavior") {
+                    FlowSettingsRow(title: "Live transcription", detail: "Start transcribing before the recording ends.", symbol: "waveform") {
+                        Toggle("Live transcription", isOn: settingBinding(\.dictationLiveTranscription)).labelsHidden().toggleStyle(.switch)
                     }
                 }
-                SettingsCard(eyebrow: "", title: "Transcription service") {
-                    Picker("Provider", selection: Binding(
-                        get: { controller.settings.speechProvider },
-                        set: { controller.selectSpeechProvider($0) }
-                    )) {
-                        ForEach(SpeechProvider.allCases) { Text($0.title).tag($0) }
-                    }.pickerStyle(.menu)
-                    ProviderKeyEditor(scope: CredentialScope(.speech, settings: controller.settings),
-                                      reuseScope: CredentialScope(.languageModel, settings: controller.settings))
-                        .id(CredentialScope(.speech, settings: controller.settings).account)
-                    Divider()
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle")
+                    Text(!controller.settings.dictationLiveTranscription ? "Audio is sent after you stop recording." :
+                         controller.settings.automaticStreaming && StreamingCapability.resolve(controller.settings) != nil
+                         ? "Your current model supports streaming." : "Audio is transcribed in 15-second sections.")
+                }.font(.system(size: 12)).foregroundStyle(FlowTheme.inkMuted)
+                writingBehavior
+            }.frame(maxWidth: 760).padding(.horizontal, 32).padding(.vertical, 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var writingBehavior: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            FlowSettingsGroup(title: "Writing cleanup") {
+                FlowSettingsRow(title: "Polish my transcripts", detail: "Clean up speech before it becomes a note.", symbol: "text.badge.checkmark") {
+                    Toggle("Polish my transcripts", isOn: settingBinding(\.cleanupEnabled)).labelsHidden().toggleStyle(.switch)
+                }
+                FlowRowDivider()
+                VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Model").font(.caption).foregroundStyle(.secondary)
-                            Text(controller.settings.speechModel).font(.system(size: 12, weight: .medium)).textSelection(.enabled)
-                        }
+                        Text("Cleanup strength").font(.system(size: 13, weight: .medium))
                         Spacer()
-                        if !StreamingCapability.models(for: controller.settings.speechProvider).isEmpty {
-                            Menu("Change") {
-                                Button(controller.settings.speechProvider.defaultModel) {
-                                    settingBinding(\.speechModel).wrappedValue = controller.settings.speechProvider.defaultModel
-                                }
-                                Divider()
-                                ForEach(StreamingCapability.models(for: controller.settings.speechProvider).filter { $0 != controller.settings.speechProvider.defaultModel }, id: \.self) { model in
-                                    Button(model) { settingBinding(\.speechModel).wrappedValue = model }
-                                }
-                            }.fixedSize()
-                        }
+                        Picker("Cleanup strength", selection: settingBinding(\.cleanupStrength)) {
+                            ForEach(CleanupStrength.allCases) { Text($0.title).tag($0) }
+                        }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 290)
                     }
-                    DisclosureGroup("Advanced") {
-                        VStack(alignment: .leading, spacing: 14) {
-                            labeledField("Model ID", text: settingBinding(\.speechModel), placeholder: controller.settings.speechProvider.defaultModel)
-                            labeledField("Base URL", text: settingBinding(\.speechBaseURL), placeholder: controller.settings.speechProvider.defaultBaseURL)
-                            Toggle("Use streaming when available", isOn: settingBinding(\.automaticStreaming))
-                            Text(StreamingCapability.description(for: controller.settings)).font(.caption).foregroundStyle(.secondary)
-                        }.padding(.top, 12)
-                    }.font(.caption).foregroundStyle(.secondary)
-                }
-            }.frame(maxWidth: 680).padding(32).frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func settingsHeading(_ title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 25, weight: .semibold))
-            Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary)
-        }.padding(.bottom, 4)
-    }
-
-    // MARK: - Language Model
-
-    private var languageModelTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                settingsHeading("Writing & cleanup", subtitle: "Make your words read the way you intended.")
-                SettingsCard(eyebrow: "", title: "Your writing style") {
-                    Toggle("Polish every transcript", isOn: settingBinding(\.cleanupEnabled))
-                        .toggleStyle(.switch)
-
-                    Picker("Cleanup strength", selection: settingBinding(\.cleanupStrength)) {
-                        ForEach(CleanupStrength.allCases) { Text($0.title).tag($0) }
-                    }.pickerStyle(.segmented)
-                    Text(controller.settings.cleanupStrength.instruction)
-                        .font(.caption).foregroundStyle(.secondary)
-
-                    Picker("Writing tone", selection: settingBinding(\.writingTone)) {
-                        ForEach(WritingTone.allCases) { tone in
-                            Text(tone.title).tag(tone)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-                SettingsCard(eyebrow: "", title: "Writing service") {
-                    Picker("Writing provider", selection: Binding(
-                        get: { controller.settings.languageModelProvider },
-                        set: { controller.selectLanguageModelProvider($0) }
-                    )) {
-                        ForEach(LanguageModelProvider.allCases) { provider in
-                            Text(provider.title).tag(provider)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .flowFieldRow()
-
-                    ProviderKeyEditor(scope: CredentialScope(.languageModel, settings: controller.settings),
-                                      reuseScope: CredentialScope(.speech, settings: controller.settings))
-                        .id(CredentialScope(.languageModel, settings: controller.settings).account)
-                    Divider()
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Model").font(.caption).foregroundStyle(.secondary)
-                        Text(controller.settings.languageModel).font(.system(size: 12, weight: .medium)).textSelection(.enabled)
-                    }
-                    DisclosureGroup("Advanced") {
-                        VStack(spacing: 14) {
-                            labeledField("Model ID", text: settingBinding(\.languageModel), placeholder: controller.settings.languageModelProvider.defaultModel)
-                            labeledField("Base URL", text: settingBinding(\.languageModelBaseURL), placeholder: controller.settings.languageModelProvider.defaultBaseURL)
-                        }.padding(.top, 12)
-                    }.font(.caption).foregroundStyle(.secondary)
-                }
+                    Text(controller.settings.cleanupStrength.instruction).font(.system(size: 12)).foregroundStyle(FlowTheme.inkMuted)
+                }.padding(16).disabled(!controller.settings.cleanupEnabled)
+                FlowRowDivider()
+                FlowSettingsRow(title: "Default tone", detail: "Override this for individual apps in Personalization.") {
+                    Picker("Default tone", selection: settingBinding(\.writingTone)) {
+                        ForEach(WritingTone.allCases) { Text($0.title).tag($0) }
+                    }.labelsHidden().frame(width: 170)
+                }.disabled(!controller.settings.cleanupEnabled)
             }
-            .frame(maxWidth: 680)
-            .padding(32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            if controller.settings.cleanupEnabled && controller.credential(for: .languageModel).isEmpty {
+                Label("Add a writing key to enable cleanup and meeting summaries.", systemImage: "key")
+                    .font(.system(size: 12)).foregroundStyle(FlowTheme.warning)
+            }
         }
     }
 
-    private func appName(for identifier: String) -> String {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) else { return identifier }
-        return url.deletingPathExtension().lastPathComponent
+    private var sectionSubtitle: String {
+        switch section {
+        case .connections: return "Manage your providers, API keys, and models in one place."
+        case .personalize: return "Your vocabulary, snippets, and app preferences."
+        case .shortcuts: return "Keys for dictation, meetings, and screenshots."
+        case .privacy: return "Choose what stays on this Mac."
+        case .permissions: return "Manage the access OpenScribe needs."
+        default: return "Appearance, recording, and everyday preferences."
+        }
     }
+    private func sectionLabel(_ title: String) -> some View {
+        Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(FlowTheme.inkMuted)
+    }
+
+    private var personalizationTab: some View {
+        PersonalizationView(controller: controller)
+    }
+
+    // MARK: - Shortcuts
 
     private var shortcutsTab: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Picker("Personalization", selection: $personalizationTab) {
-                    ForEach(["Dictionary", "Snippets", "App styles"], id: \.self) { Text($0).tag($0) }
-                }.pickerStyle(.segmented)
-                if personalizationTab == "Dictionary" {
-                SettingsCard(eyebrow: "CORRECTION DICTIONARY", title: "Dictionary",
-                             detail: "Correct words and phrases automatically, even with cleanup off.") {
-                    labeledField("Vocabulary", text: vocabularyBinding, placeholder: "Names and terms, comma-separated")
-                    Text("Vocabulary guides AI cleanup. Correction pairs also work with cleanup off.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Divider()
-                    ForEach(controller.settings.correctionRules) { rule in
-                        HStack {
-                            Text(rule.heard)
-                            Image(systemName: "arrow.right").foregroundStyle(.secondary)
-                            Text(rule.replacement).fontWeight(.medium)
-                            Spacer()
-                            Button("Remove") { controller.updateSettings { $0.correctionRules.removeAll { $0.id == rule.id } } }
+            VStack(alignment: .leading, spacing: 22) {
+                if !controller.hotkeyFailures.isEmpty {
+                    FlowBanner(symbol: "exclamationmark.triangle.fill", tint: FlowTheme.warning,
+                               title: "Some shortcuts aren’t active",
+                               detail: shortcutFailureDetail) {
+                        if controller.hotkeyFailures.contains(where: { controller.settings.shortcut(for: $0)?.isGlobe == true }) {
+                            Button("Permissions") { controller.workspaceSection = .permissions }.buttonStyle(.flow(.secondary, size: .small))
                         }
                     }
-                    TextField("Usually transcribed as", text: $correctionHeard)
-                    TextField("Replace with", text: $correctionReplacement)
-                    Button("Save correction") {
-                        let heard = correctionHeard.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let replacement = correctionReplacement.trimmingCharacters(in: .whitespacesAndNewlines)
-                        controller.updateSettings {
-                            $0.correctionRules.removeAll { $0.heard.caseInsensitiveCompare(heard) == .orderedSame }
-                            $0.correctionRules.append(CorrectionRule(heard: heard, replacement: replacement))
-                        }
-                        correctionHeard = ""; correctionReplacement = ""
-                    }
-                    .disabled(correctionHeard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || correctionReplacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                }
-                if personalizationTab == "Snippets" {
-                SettingsCard(eyebrow: "SNIPPETS", title: "Snippets",
-                             detail: "Say a trigger as your entire dictation to insert its exact text. Snippets skip AI cleanup.") {
-                    ForEach(controller.settings.snippets) { snippet in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(snippet.trigger).fontWeight(.medium)
-                                Text(snippet.replacement).foregroundStyle(.secondary).lineLimit(2)
-                            }
-                            Spacer()
-                            Button("Remove") { controller.updateSettings { $0.snippets.removeAll { $0.id == snippet.id } } }
-                        }
+                FlowSettingsGroup(title: "Dictation", footer: "A quick tap of the Dictate shortcut keeps recording until you tap again. Hold it to talk, and release to finish.") {
+                    ForEach(Array(ShortcutAction.dictation.enumerated()), id: \.element) { index, action in
+                        if index > 0 { FlowRowDivider() }
+                        shortcutRow(action)
                     }
-                    TextField("Trigger, e.g. my signature", text: $snippetTrigger)
-                    TextField("Text to insert", text: $snippetReplacement, axis: .vertical).lineLimit(3...6)
-                    Button("Add snippet") {
-                        controller.updateSettings { $0.snippets.append(VoiceSnippet(trigger: snippetTrigger.trimmingCharacters(in: .whitespacesAndNewlines), replacement: snippetReplacement)) }
-                        snippetTrigger = ""
-                        snippetReplacement = ""
-                    }
-                    .disabled(snippetTrigger.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || snippetReplacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || VoiceSnippet.expansion(for: snippetTrigger, snippets: controller.settings.snippets) != nil)
                 }
-                }
-                if personalizationTab == "App styles" {
-                SettingsCard(eyebrow: "APP STYLES", title: "App styles",
-                             detail: "Override your default writing tone when cleanup is enabled. Uses the app where recording begins.") {
-                    ForEach(controller.settings.appWritingTones.keys.sorted(), id: \.self) { bundleID in
-                        HStack {
-                            Text(appName(for: bundleID))
-                            Spacer()
-                            Text(controller.settings.appWritingTones[bundleID]?.title ?? "")
-                            Button("Remove") { controller.updateSettings { $0.appWritingTones.removeValue(forKey: bundleID) } }
-                        }
+                FlowSettingsGroup(title: "Meetings & screenshots", footer: "Screenshots are added to today’s note, and text in them becomes searchable. Screen Recording access is required.") {
+                    ForEach(Array(ShortcutAction.capture.enumerated()), id: \.element) { index, action in
+                        if index > 0 { FlowRowDivider() }
+                        shortcutRow(action)
                     }
-                    HStack {
-                        Button("Choose app…") {
-                            let panel = NSOpenPanel()
-                            panel.directoryURL = URL(fileURLWithPath: "/Applications")
-                            panel.canChooseDirectories = false
-                            panel.allowsMultipleSelection = false
-                            panel.allowedContentTypes = [.applicationBundle]
-                            if panel.runModal() == .OK, let url = panel.url,
-                               let identifier = Bundle(url: url)?.bundleIdentifier { appBundleID = identifier }
-                        }
-                        Text(appBundleID.isEmpty ? "No app selected" : appName(for: appBundleID))
-                            .foregroundStyle(.secondary)
-                    }
-                    Picker("Tone", selection: $appTone) {
-                        ForEach(WritingTone.allCases) { Text($0.title).tag($0) }
-                    }
-                    Button("Save app style") {
-                        controller.updateSettings { $0.appWritingTones[appBundleID.trimmingCharacters(in: .whitespacesAndNewlines)] = appTone }
-                        appBundleID = ""
-                    }.disabled(appBundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                HStack {
+                    Text("Shortcuts work in every app and don’t type into it.").font(.system(size: 12)).foregroundStyle(FlowTheme.inkMuted)
+                    Spacer()
+                    Button("Restore defaults") { recordingAction = nil; controller.resetShortcuts(); controller.flash("Shortcuts restored") }
+                        .buttonStyle(.flowSecondary)
                 }
-            }.padding(32)
+                HotkeyCaptureView(isRecording: Binding(get: { recordingAction != nil }, set: { if !$0 { recordingAction = nil } })) { keyCode, modifiers, display in
+                    guard let action = recordingAction else { return }
+                    assign(KeyShortcut(keyCode: keyCode, modifiers: modifiers, display: display), to: action)
+                }.frame(width: 0, height: 0)
+            }
+            .frame(maxWidth: 760).padding(.horizontal, 32).padding(.vertical, 24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var shortcutFailureDetail: String {
+        let names = controller.hotkeyFailures.map(\.title).joined(separator: ", ")
+        return "\(names). Globe needs Accessibility access; other keys may be taken by another app."
+    }
+
+    private func shortcutRow(_ action: ShortcutAction) -> some View {
+        let shortcut = controller.settings.shortcut(for: action)
+        let recording = recordingAction == action
+        return FlowSettingsRow(title: action.title, detail: recording ? "Press the new shortcut. Escape cancels." : action.detail, symbol: action.symbol) {
+            if recording {
+                Text("Listening…").font(.system(size: 12, weight: .medium)).foregroundStyle(FlowTheme.accent)
+            } else if let shortcut {
+                FlowKeycaps(shortcut: shortcut.display)
+                    .opacity(controller.hotkeyFailures.contains(action) ? 0.45 : 1)
+            } else {
+                Text("Not set").font(.system(size: 12)).foregroundStyle(FlowTheme.inkFaint)
+            }
+            Button(recording ? "Cancel" : shortcut == nil ? "Set" : "Change") { recordingAction = recording ? nil : action }
+                .buttonStyle(.flowSecondary)
+            Menu {
+                if action.usesRelease {
+                    Button("Use Globe (fn)") { assign(.globe, to: action) }
+                }
+                if let fallback = ShortcutDefaults.bindings[action] {
+                    Button("Use default (\(fallback.display))") { assign(fallback, to: action) }
+                }
+                Divider()
+                Button("Remove shortcut", role: .destructive) { assign(nil, to: action) }.disabled(shortcut == nil)
+            } label: { Image(systemName: "ellipsis") }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("More options")
+        }
+    }
+
+    private func assign(_ shortcut: KeyShortcut?, to action: ShortcutAction) {
+        recordingAction = nil
+        if let displaced = controller.assignShortcut(shortcut, to: action) {
+            controller.flash("Removed from “\(displaced.title)”")
         }
     }
 
@@ -371,55 +288,44 @@ struct SettingsView: View {
 
     private var privacyTab: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                SettingsCard(
-                    eyebrow: "LOCAL BY DEFAULT",
-                    title: "Data & privacy",
-                    detail: "Credentials live in the app's private credentials file. Notes are stored as JSON. Audio is discarded after successful transcription unless you opt in. Interrupted dictations stay on this Mac until recovered or discarded, including after quitting. Meeting recordings remain with their meeting until you delete it."
-                ) {
-                    Toggle("Keep temporary audio files", isOn: settingBinding(\.saveRawAudio))
-                        .toggleStyle(.switch)
-
-                    HStack {
-                        Button("Delete local note history", role: .destructive) { showClearConfirmation = true }
-                            .buttonStyle(FlowQuietButtonStyle())
-                        Spacer()
-                        Text("\(controller.notes.count) note\(controller.notes.count == 1 ? "" : "s")")
-                            .flowUIFont(size: 11, weight: .medium)
-                            .foregroundStyle(FlowTheme.inkMuted)
+            VStack(alignment: .leading, spacing: 26) {
+                FlowSettingsGroup(title: "On this Mac", footer: "Notes and meeting history are kept locally. OpenScribe does not sync your library to a cloud account.") {
+                    FlowSettingsRow(title: "Notes", detail: "Saved dictations and written notes", symbol: "doc.text") {
+                        Text("\(controller.notes.count)").font(.system(size: 13)).monospacedDigit().foregroundStyle(FlowTheme.inkMuted)
+                    }
+                    FlowRowDivider()
+                    FlowSettingsRow(title: "Meetings", detail: "Recordings, transcripts, and summaries", symbol: "person.2") {
+                        Text("\(controller.meetings.meetings.count)").font(.system(size: 13)).monospacedDigit().foregroundStyle(FlowTheme.inkMuted)
+                    }
+                    FlowRowDivider()
+                    FlowSettingsRow(title: "Keep dictation audio", detail: "Keep audio after successful transcription.", symbol: "waveform") {
+                        Toggle("Keep dictation audio", isOn: settingBinding(\.saveRawAudio)).labelsHidden().toggleStyle(.switch)
                     }
                 }
-            }
-            .padding(32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+                FlowSettingsGroup(title: "Your providers") {
+                    FlowSettingsRow(title: "Transcription", detail: "Recordings are sent to \(controller.settings.speechProvider.title).", symbol: "mic") {
+                        Button("Manage") { controller.workspaceSection = .connections }.buttonStyle(.flowSecondary)
+                    }
+                    FlowRowDivider()
+                    FlowSettingsRow(title: "Writing", detail: controller.settings.cleanupEnabled
+                        ? "Cleanup uses \(controller.settings.languageModelProvider.title)." : "Transcript cleanup is off.", symbol: "text.badge.checkmark") {
+                        Button("Manage") { controller.workspaceSection = .connections }.buttonStyle(.flowSecondary)
+                    }
+                }
+                Text("Failed or interrupted dictations keep their audio until you retry or discard them. Meeting audio stays with each meeting until you delete it.")
+                    .font(.system(size: 12)).foregroundStyle(FlowTheme.inkMuted).fixedSize(horizontal: false, vertical: true)
+                FlowSettingsGroup(title: "Delete history") {
+                    FlowSettingsRow(title: "Clear all notes", detail: "Permanently remove every note from this Mac.", symbol: "trash") {
+                        Button("Delete notes…", role: .destructive) { showClearConfirmation = true }
+                            .buttonStyle(.flowSecondary).disabled(controller.notes.isEmpty)
+                    }
+                }
+            }.frame(maxWidth: 760).padding(.horizontal, 32).padding(.vertical, 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     // MARK: - Helpers
-
-    private func labeledField(_ title: String, text: Binding<String>, placeholder: String) -> some View {
-        HStack(spacing: 16) {
-            Text(title)
-                .flowUIFont(size: 12, weight: .semibold)
-                .frame(width: 90, alignment: .leading)
-            TextField(placeholder, text: text)
-                .textFieldStyle(.roundedBorder)
-                .flowUIFont(size: 12)
-        }
-    }
-
-
-    private var vocabularyBinding: Binding<String> {
-        Binding(
-            get: { controller.settings.customVocabulary.joined(separator: ", ") },
-            set: { value in
-                let words = value.split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                controller.updateSettings { $0.customVocabulary = words }
-            }
-        )
-    }
 
     private func settingBinding<T>(_ keyPath: WritableKeyPath<AppSettings, T>) -> Binding<T> {
         Binding(
@@ -431,31 +337,40 @@ struct SettingsView: View {
 
 }
 
-// MARK: - SettingsCard
-
-private struct SettingsCard<Content: View>: View {
-    let eyebrow: String
-    let title: String
-    var detail: String = ""
-    @ViewBuilder let content: () -> Content
-
+private struct ThemeChoice: View {
+    let theme: FlowThemeVariant
+    let selected: Bool
+    let action: () -> Void
+    private var dark: Bool { theme == .dark }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).flowUIFont(size: 18, weight: .semibold)
-                if !detail.isEmpty {
-                    Text(detail)
-                        .flowUIFont(size: 12)
-                        .foregroundStyle(FlowTheme.inkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
+        Button(action: action) {
+            VStack(spacing: 9) {
+                HStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Circle().fill(FlowTheme.accent).frame(width: 7, height: 7)
+                        RoundedRectangle(cornerRadius: 2).fill(FlowTheme.accent.opacity(0.3)).frame(height: 5)
+                        RoundedRectangle(cornerRadius: 2).fill(Color.gray.opacity(0.2)).frame(height: 5)
+                        Spacer(minLength: 0)
+                    }.padding(8).frame(width: 42).background(Color.gray.opacity(0.12))
+                    VStack(alignment: .leading, spacing: 7) {
+                        RoundedRectangle(cornerRadius: 2).fill(dark ? Color.white.opacity(0.6) : Color.black.opacity(0.3)).frame(width: 38, height: 5)
+                        RoundedRectangle(cornerRadius: 3).fill(dark ? Color.white.opacity(0.08) : Color.white).frame(height: 22)
+                        Spacer(minLength: 0)
+                    }.padding(10).frame(maxWidth: .infinity)
                 }
-            }
-            content()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(FlowTheme.paper, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(FlowTheme.line, lineWidth: 1))
+                .frame(height: 70)
+                .background(dark ? Color(white: 0.12) : Color(white: 0.96))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                HStack(spacing: 5) {
+                    if theme == .system { Image(systemName: "circle.lefthalf.filled") }
+                    Text(theme.title)
+                    if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowTheme.accent) }
+                }.font(.system(size: 12, weight: .medium))
+            }.padding(8).frame(maxWidth: .infinity)
+                .background(selected ? FlowTheme.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 11))
+                .overlay(RoundedRectangle(cornerRadius: 11).stroke(selected ? FlowTheme.accent : FlowTheme.line, lineWidth: selected ? 1.5 : 1))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityLabel(theme.title + " appearance").accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -465,12 +380,14 @@ private struct HotkeyCaptureView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> HotkeyCaptureNSView {
         let view = HotkeyCaptureNSView()
+        view.onCancel = { isRecording = false }
         view.onCapture = onCapture
         view.isRecording = isRecording
         return view
     }
 
     func updateNSView(_ nsView: HotkeyCaptureNSView, context: Context) {
+        nsView.onCancel = { isRecording = false }
         nsView.onCapture = onCapture
         nsView.isRecording = isRecording
     }
@@ -482,6 +399,7 @@ private struct HotkeyCaptureView: NSViewRepresentable {
 
 private final class HotkeyCaptureNSView: NSView {
     var onCapture: ((UInt16, NSEvent.ModifierFlags, String) -> Void)?
+    var onCancel: (() -> Void)?
     var isRecording = false {
         didSet {
             if isRecording {
@@ -532,6 +450,7 @@ private final class HotkeyCaptureNSView: NSView {
                 return event
             }
 
+            if event.keyCode == 53 { self.stopRecording(); self.onCancel?(); return nil }
             let modifiers = event.modifierFlags.intersection(ShortcutFormatter.supportedModifiers)
             guard !modifiers.isEmpty else { return event }
             self.capture(keyCode: event.keyCode, modifiers: modifiers, characters: event.charactersIgnoringModifiers)
