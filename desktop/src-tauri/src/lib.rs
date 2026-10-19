@@ -1,14 +1,14 @@
+pub mod apple_time;
 mod audio;
 mod credentials;
+pub mod meeting_audio;
+pub mod meetings;
+mod migrate;
+pub mod notes;
 mod platform;
 pub mod provider;
-pub mod apple_time;
 pub mod storage;
-pub mod notes;
-pub mod meetings;
-pub mod meeting_audio;
 pub mod summary;
-mod migrate;
 
 use serde::Serialize;
 use std::path::PathBuf;

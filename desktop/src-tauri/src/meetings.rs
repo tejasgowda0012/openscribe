@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     cmp::Ordering as CmpOrdering,
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -150,6 +150,16 @@ pub fn passages(segments: &[MeetingSegment], track: Option<&str>) -> Vec<Passage
     passages
 }
 impl MeetingRecord {
+    pub fn checkpoint(&mut self, chunk: MeetingSegment) {
+        if !self.segments.iter().any(|s| s.id == chunk.id) {
+            self.duration = self.duration.max(chunk.start + chunk.duration);
+            self.segments.push(chunk);
+            self.segments.sort_by(segment_order);
+        }
+    }
+    pub fn needs_summary_confirmation(&self, summarize: bool, summary_only: bool) -> bool {
+        summarize && !summary_only && self.word_count() < 80
+    }
     pub fn word_count(&self) -> usize {
         self.segments
             .iter()
@@ -394,20 +404,22 @@ fn progress(app: &tauri::AppHandle, id: Id, message: &str) {
     let _ = app.emit("meeting://progress", json!({"id":id,"message":message}));
 }
 fn start_sources(
-    app: &tauri::AppHandle,
+    _app: &tauri::AppHandle,
     c: &mut Controller,
     record: &MeetingRecord,
 ) -> Result<(), String> {
     let active = c.active.as_mut().ok_or("No meeting is active.")?;
+    *active
+        .meter
+        .lock()
+        .map_err(|_| "Audio meter is unavailable.")? = [0.0; 2];
     *active
         .failure
         .lock()
         .map_err(|_| "Audio recorder is unavailable.")? = None;
     let part = meeting_audio::part_directory(&c.store.validated_directory(record.id)?);
     let mut tracks = vec![];
-    let settings = storage::with_profile(app, &app.state::<ProfileState>(), |s| {
-        Ok(s.settings.clone())
-    })?;
+    let settings = &record.settings;
     if record.includes_system_audio {
         tracks.push(meeting_audio::start_track(
             part.join("system"),
@@ -444,6 +456,9 @@ fn stop_sources(
         if let Err(e) = track.stop() {
             failure = Some(e);
         }
+    }
+    if let Ok(mut meter) = active.meter.lock() {
+        *meter = [0.0; 2];
     }
     let mut record = c.store.get(id)?;
     record.duration = elapsed;
@@ -573,7 +588,7 @@ pub fn pause_meeting(app: tauri::AppHandle) -> Result<(), String> {
 }
 #[tauri::command]
 pub fn resume_meeting(app: tauri::AppHandle) -> Result<(), String> {
-    controller(&app, |c| {
+    let id = controller(&app, |c| {
         let id = c.active.as_ref().ok_or("No meeting is active.")?.id;
         let mut record = c.store.get(id)?;
         if record.status != MeetingStatus::Paused {
@@ -582,40 +597,52 @@ pub fn resume_meeting(app: tauri::AppHandle) -> Result<(), String> {
         start_sources(&app, c, &record)?;
         record.status = MeetingStatus::Recording;
         record.last_error = None;
-        save(&app, c, record)
-    })
+        save(&app, c, record)?;
+        Ok(id)
+    })?;
+    start_live(app, id)
 }
 #[tauri::command]
 pub async fn finish_meeting(app: tauri::AppHandle, summarize: Option<bool>) -> Result<(), String> {
-    let (id, should_process, should_summarize) = controller(&app, |c| {
+    let (id, should_process, should_summarize, cancel) = controller(&app, |c| {
         let id = stop_sources(&app, c, true)?;
         let active = c.active.take().expect("active meeting");
         active.live_stop.store(true, Ordering::SeqCst);
         if summarize == Some(false) {
             active.live_cancel.store(true, Ordering::SeqCst);
         }
+        // Reserve the controller until the current upload has checkpointed and
+        // final processing finishes. A concurrent start/delete must not race it.
+        c.busy = Some(id);
+        c.cancel = active.live_cancel;
         let record = c.store.get(id)?;
         let summary = summarize.unwrap_or(record.summarize_on_stop);
         Ok((
             id,
             summarize != Some(false) && (summary || record.live_transcription == Some(true)),
             summary,
+            c.cancel.clone(),
         ))
     })?;
     // Wait for the in-flight live upload to checkpoint before taking missing chunks.
-    let state = app.state::<MeetingState>();
-    let gate = state.pipeline.lock().await;
-    drop(gate);
     if should_process {
-        process(app, id, false, should_summarize).await
+        run_processing(app, id, false, should_summarize, cancel).await
     } else {
-        Ok(())
+        let state = app.state::<MeetingState>();
+        let _gate = state.pipeline.lock().await;
+        controller(&app, |c| {
+            c.busy = None;
+            Ok(())
+        })
     }
 }
 async fn cancelled<T>(
     token: &Arc<AtomicBool>,
     future: impl std::future::Future<Output = Result<T, String>>,
 ) -> Result<T, String> {
+    if token.load(Ordering::SeqCst) {
+        return Err("Processing stopped. Completed sections are saved; you can resume.".into());
+    }
     tokio::select! {result=future=>result,_=async{while !token.load(Ordering::SeqCst){tokio::time::sleep(std::time::Duration::from_millis(50)).await;}}=>Err("Processing stopped. Completed sections are saved; you can resume.".into())}
 }
 async fn transcribe_chunk(
@@ -644,6 +671,9 @@ async fn transcribe_chunk(
         ),
     )
     .await?;
+    if cancel.load(Ordering::SeqCst) {
+        return Err("Processing stopped. Completed sections are saved; you can resume.".into());
+    }
     chunk.text = if let Some(filter) = crate::provider::TRANSCRIPT_FILTER.get() {
         filter(&result.text, &settings)
     } else {
@@ -651,11 +681,7 @@ async fn transcribe_chunk(
     };
     controller(app, |c| {
         let mut latest = c.store.get(id)?;
-        if !latest.segments.iter().any(|s| s.id == chunk.id) {
-            latest.duration = latest.duration.max(chunk.start + chunk.duration);
-            latest.segments.push(chunk);
-            latest.segments.sort_by(segment_order);
-        }
+        latest.checkpoint(chunk);
         save(app, c, latest)
     })
 }
@@ -762,6 +788,15 @@ async fn process(
         c.cancel = Arc::new(AtomicBool::new(false));
         Ok(c.cancel.clone())
     })?;
+    run_processing(app, id, summary_only, summarize, cancel).await
+}
+async fn run_processing(
+    app: tauri::AppHandle,
+    id: Id,
+    summary_only: bool,
+    summarize: bool,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), String> {
     let state = app.state::<MeetingState>();
     let _gate = state.pipeline.lock().await;
     let result = process_inner(&app, id, summary_only, summarize, &cancel).await;
@@ -784,6 +819,9 @@ async fn process_inner(
     summarize: bool,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
+    if cancel.load(Ordering::SeqCst) {
+        return Err("Processing stopped. Completed sections are saved; you can resume.".into());
+    }
     if !summary_only {
         let chunks = controller(app, |c| {
             let inventory = meeting_audio::inventory(&c.store.validated_directory(id)?, false)?;
@@ -831,7 +869,7 @@ async fn process_inner(
             "No readable audio was found. Check the selected sources and permissions.".into(),
         );
     }
-    let short = summarize && !summary_only && record.word_count() < 80;
+    let short = record.needs_summary_confirmation(summarize, summary_only);
     if summarize && !short {
         controller(app, |c| {
             let mut record = c.store.get(id)?;
@@ -840,12 +878,18 @@ async fn process_inner(
         })?;
         progress(app, id, "Summarizing with transcript referencesâ€¦");
         let result = cancelled(cancel, summary::summarize(&record)).await?;
+        if cancel.load(Ordering::SeqCst) {
+            return Err("Processing stopped. Completed sections are saved; you can resume.".into());
+        }
         controller(app, |c| {
             let mut latest = c.store.get(id)?;
             latest.summary = Some(result);
             latest.summary_needs_confirmation = None;
             save(app, c, latest)
         })?;
+    }
+    if cancel.load(Ordering::SeqCst) {
+        return Err("Processing stopped. Completed sections are saved; you can resume.".into());
     }
     controller(app, |c| {
         let mut latest = c.store.get(id)?;
@@ -935,6 +979,47 @@ pub fn meeting_audio_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn silence_checkpoints_once_and_summary_threshold_requires_confirmation() {
+        let mut record = MeetingRecord::default();
+        let silence = MeetingSegment {
+            id: "silence".into(),
+            start: 15.0,
+            duration: 15.0,
+            ..MeetingSegment::default()
+        };
+        record.checkpoint(silence.clone());
+        record.checkpoint(silence);
+        assert_eq!(record.segments.len(), 1);
+        assert_eq!(record.duration, 30.0);
+        assert_eq!(record.segments[0].text, "");
+        record.segments[0].text = "word ".repeat(79);
+        assert!(record.needs_summary_confirmation(true, false));
+        assert!(!record.needs_summary_confirmation(false, false));
+        assert!(!record.needs_summary_confirmation(true, true));
+        record.segments[0].text.push_str("eightieth");
+        assert!(!record.needs_summary_confirmation(true, false));
+    }
+    #[tokio::test]
+    async fn explicit_cancellation_stops_pending_work_but_normal_completion_returns() {
+        let token = Arc::new(AtomicBool::new(false));
+        assert_eq!(cancelled(&token, async { Ok(42) }).await.unwrap(), 42);
+        let trigger = token.clone();
+        let cancel = async move {
+            trigger.store(true, Ordering::SeqCst);
+        };
+        let work = cancelled::<()>(&token, std::future::pending());
+        let (_, result) = tokio::join!(cancel, work);
+        assert!(result.unwrap_err().contains("Completed sections are saved"));
+        let polled = AtomicBool::new(false);
+        assert!(cancelled(&token, async {
+            polled.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .is_err());
+        assert!(!polled.load(Ordering::SeqCst));
+    }
     #[test]
     fn swift_manifest_fixture_dates_defaults_snapshot_and_unknown_fields() {
         let fixture = r#"{"id":"E621E1F8-C36C-495A-93FC-0C247A3E6E5F","title":"Call","createdAt":782570000,"settings":{"speechProvider":"openAI"},"future":42}"#;

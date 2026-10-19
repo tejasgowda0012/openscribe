@@ -48,6 +48,8 @@ async fn transcribe_impl(
     hints: Option<&SpeechHints>,
     allow_empty: bool,
 ) -> Result<ProviderResult, String> {
+    let config = file_config(config);
+    let config = &config;
     let key = super::credentials::read(&config.credential_account)?
         .ok_or_else(|| "Add your transcription provider key in Settings.".to_string())?;
     let client = Client::builder()
@@ -55,11 +57,16 @@ async fn transcribe_impl(
         .build()
         .map_err(|e| e.to_string())?;
     let text = match config.provider.as_str() {
-        "openRouter" => openrouter_transcription(&client, path, config, &key, hints).await?,
+        "openRouter" if hints.is_some_and(|h| !h.terms.is_empty()) => {
+            openrouter_transcription(&client, path, config, &key, hints).await?
+        }
         "deepgram" => deepgram(&client, path, config, &key, hints).await?,
         "assemblyAI" => assembly_ai(&client, path, config, &key, hints).await?,
         _ => openai_transcription(&client, path, config, &key, hints).await?,
     };
+    transcription_result(&text, allow_empty)
+}
+fn transcription_result(text: &str, allow_empty: bool) -> Result<ProviderResult, String> {
     if !allow_empty && text.trim().is_empty() {
         return Err("The recording contained no speech or was too short.".into());
     }
@@ -76,8 +83,27 @@ async fn openrouter_transcription(
     hints: Option<&SpeechHints>,
 ) -> Result<String, String> {
     let audio = upload_bytes(path).await?;
+    let payload = openrouter_payload(&audio, &config.model, hints);
+    let response = client
+        .post(endpoint(&config.base_url, "audio/transcriptions"))
+        .bearer_auth(key)
+        .header("HTTP-Referer", "https://openscribe.local")
+        .header("X-Title", "OpenScribe")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(network_error)?;
+    decode_text_response(response, |value| {
+        value
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
+    .await
+}
+fn openrouter_payload(audio: &[u8], model: &str, hints: Option<&SpeechHints>) -> Value {
     let mut payload =
-        json!({"model":config.model,"input_audio":{"data":BASE64.encode(audio),"format":"wav"}});
+        json!({"model":model,"input_audio":{"data":BASE64.encode(audio),"format":"wav"}});
     if let Some(hints) = hints {
         if !hints.terms.is_empty() {
             let mut options = serde_json::Map::new();
@@ -93,22 +119,7 @@ async fn openrouter_transcription(
             payload["provider"] = json!({"options":options});
         }
     }
-    let response = client
-        .post(endpoint(&config.base_url, "audio/transcriptions"))
-        .bearer_auth(key)
-        .header("HTTP-Referer", "https://openscribe.local")
-        .header("X-Title", "OpenScribe")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-    decode_text_response(response, |value| {
-        value
-            .get("text")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    })
-    .await
+    payload
 }
 
 pub async fn clean(
@@ -149,7 +160,7 @@ async fn openai_transcription(
             multipart::Part::bytes(bytes)
                 .file_name(filename.to_string())
                 .mime_str("audio/wav")
-                .map_err(|error| error.to_string())?,
+                .map_err(network_error)?,
         );
     if let Some(hints) = hints {
         if config.provider == "mistral" {
@@ -160,13 +171,16 @@ async fn openai_transcription(
             form = form.text("prompt", prompt.clone());
         }
     }
-    let response = client
+    let mut request = client
         .post(endpoint(&config.base_url, "audio/transcriptions"))
         .bearer_auth(key)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
+        .multipart(form);
+    if config.provider == "openRouter" {
+        request = request
+            .header("HTTP-Referer", "https://openscribe.local")
+            .header("X-Title", "OpenScribe");
+    }
+    let response = request.send().await.map_err(network_error)?;
     decode_text_response(response, |value| {
         value
             .get("text")
@@ -215,7 +229,7 @@ async fn deepgram(
         .body(bytes)
         .send()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(network_error)?;
     decode_text_response(response, |value| {
         value
             .pointer("/results/channels/0/alternatives/0/transcript")
@@ -239,7 +253,7 @@ async fn assembly_ai(
         .body(bytes)
         .send()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(network_error)?;
     let upload: Value = checked_json(upload).await?;
     let audio_url = upload
         .get("upload_url")
@@ -257,7 +271,7 @@ async fn assembly_ai(
         .json(&job)
         .send()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(network_error)?;
     let created: Value = checked_json(created).await?;
     let id = created
         .get("id")
@@ -270,7 +284,7 @@ async fn assembly_ai(
             .header("Authorization", key)
             .send()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(network_error)?;
         let value: Value = checked_json(response).await?;
         match value.get("status").and_then(Value::as_str) {
             Some("completed") => {
@@ -302,7 +316,7 @@ async fn openai_chat(
 ) -> Result<String, String> {
     let response = client.post(endpoint(&config.base_url, "chat/completions")).bearer_auth(key)
         .json(&json!({"model": config.model, "temperature": 0.15, "messages": [{"role":"system","content":system},{"role":"user","content":text}]}))
-        .send().await.map_err(|error| error.to_string())?;
+        .send().await.map_err(network_error)?;
     decode_text_response(response, |value| {
         value
             .pointer("/choices/0/message/content")
@@ -321,7 +335,7 @@ async fn anthropic(
 ) -> Result<String, String> {
     let response = client.post(endpoint(&config.base_url, "v1/messages")).header("x-api-key", key).header("anthropic-version", "2023-06-01")
         .json(&json!({"model":config.model,"max_tokens":2048,"temperature":0.15,"system":system,"messages":[{"role":"user","content":text}]}))
-        .send().await.map_err(|error| error.to_string())?;
+        .send().await.map_err(network_error)?;
     decode_text_response(response, |value| {
         value
             .pointer("/content/0/text")
@@ -345,7 +359,7 @@ async fn gemini(
         key
     );
     let response = client.post(url).json(&json!({"systemInstruction":{"parts":[{"text":system}]},"contents":[{"role":"user","parts":[{"text":text}]}],"generationConfig":{"temperature":0.15}}))
-        .send().await.map_err(|error| error.to_string())?;
+        .send().await.map_err(network_error)?;
     decode_text_response(response, |value| {
         value
             .pointer("/candidates/0/content/parts/0/text")
@@ -362,10 +376,55 @@ fn endpoint(base: &str, path: &str) -> String {
         path.trim_start_matches('/')
     )
 }
+fn network_error(error: reqwest::Error) -> String {
+    // URLs can carry credentials (notably Gemini's key query parameter).
+    error.without_url().to_string()
+}
+/// Swift maps streaming-only selections to file-capable models for saved chunks.
+fn file_config(config: &ProviderConfig) -> ProviderConfig {
+    let mut result = config.clone();
+    let Ok(url) = reqwest::Url::parse(&config.base_url) else {
+        return result;
+    };
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.port_or_known_default() != Some(443)
+    {
+        return result;
+    }
+    let host = url.host_str().unwrap_or_default();
+    let path = url.path().trim_matches('/');
+    let model = config.model.trim();
+    let replacement = match (config.provider.as_str(), host, path, model) {
+        ("mistral", "api.mistral.ai", "v1", "voxtral-mini-transcribe-realtime-2602") => {
+            "voxtral-mini-latest"
+        }
+        (
+            "openAI",
+            "api.openai.com",
+            "v1",
+            "gpt-live-transcribe" | "gpt-transcribe" | "gpt-realtime-whisper",
+        ) => "gpt-4o-mini-transcribe",
+        (
+            "assemblyAI",
+            "api.assemblyai.com",
+            "v2",
+            "universal-3-5-pro"
+            | "universal-streaming-english"
+            | "universal-streaming-multilingual",
+        ) => "best",
+        _ => return result,
+    };
+    result.model = replacement.into();
+    result
+}
 
 async fn checked_json(response: reqwest::Response) -> Result<Value, String> {
     let status = response.status();
-    let body = response.text().await.map_err(|error| error.to_string())?;
+    let body = response.text().await.map_err(network_error)?;
     if !status.is_success() {
         let detail = serde_json::from_str::<Value>(&body)
             .ok()
@@ -508,6 +567,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn silence_is_a_successful_meeting_section_but_dictation_reports_no_speech() {
+        assert_eq!(transcription_result(" \n", true).unwrap().text, "");
+        assert!(transcription_result(" \n", false).is_err());
+        assert_eq!(
+            transcription_result(" hello ", false).unwrap().text,
+            "hello"
+        );
+    }
+    #[test]
+    fn provider_hint_payload_and_file_model_fallback_match_swift() {
+        let hints = SpeechHints {
+            prompt: Some("Spell MahaKrushi".into()),
+            terms: vec!["MahaKrushi farm".into(), "FARM, x".into()],
+        };
+        let payload = openrouter_payload(b"wav", "model", Some(&hints));
+        assert_eq!(payload["input_audio"]["data"], BASE64.encode(b"wav"));
+        assert_eq!(
+            payload["provider"]["options"]["mistral"]["context_bias"],
+            "MahaKrushi,farm"
+        );
+        for provider in ["openai", "groq", "fireworks", "deepinfra", "together"] {
+            assert_eq!(
+                payload["provider"]["options"][provider]["prompt"],
+                "Spell MahaKrushi"
+            );
+        }
+        let mut config = ProviderConfig {
+            provider: "mistral".into(),
+            base_url: "https://api.mistral.ai/v1".into(),
+            model: "voxtral-mini-transcribe-realtime-2602".into(),
+            credential_account: "speech".into(),
+        };
+        assert_eq!(file_config(&config).model, "voxtral-mini-latest");
+        config.base_url = "https://custom.example/v1".into();
+        assert_eq!(file_config(&config).model, config.model);
+    }
     #[test]
     fn classify_retry_statuses_and_network_only() {
         for status in [408, 429, 500, 503, 599] {

@@ -111,6 +111,23 @@ pub async fn summarize(record: &MeetingRecord) -> Result<MeetingSummary, String>
 mod tests {
     use super::*;
     #[test]
+    fn system_prompt_is_exactly_the_swift_prompt() {
+        let swift = include_str!("../../../Sources/OpenScribe/MeetingController.swift");
+        let prompt = swift
+            .split("let system = \"\"\"\n")
+            .nth(1)
+            .unwrap()
+            .split("            \"\"\"")
+            .next()
+            .unwrap();
+        let expected = prompt
+            .lines()
+            .map(|line| line.strip_prefix("            ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(SYSTEM_PROMPT, expected);
+    }
+    #[test]
     fn validation_and_merge_match_swift() {
         let ids = HashSet::from(["a".into()]);
         let good =
