@@ -1,7 +1,10 @@
 mod audio;
+pub mod calendar;
 mod credentials;
+pub mod dictionary;
 mod platform;
 mod provider;
+pub mod shortcuts;
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -101,12 +104,15 @@ fn paste_keystroke() -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(audio::RecorderState::default())
+        .manage(shortcuts::ShortcutManager::default())
+        .manage(calendar::CalendarState::default())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            calendar::boot(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.emit("openscribe-ready", ());
             }
@@ -122,6 +128,11 @@ pub fn run() {
             remove_credential,
             transcribe_recording,
             clean_transcript,
+            dictionary::apply_dictionary,
+            shortcuts::register_shortcuts,
+            shortcuts::suspend_shortcuts,
+            calendar::calendar_refresh,
+            calendar::calendar_decision,
             paste_keystroke
         ])
         .run(tauri::generate_context!())
