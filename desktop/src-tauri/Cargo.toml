@@ -33,3 +33,11 @@ hound = "3.5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 enigo = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+ical = { version = "0.11", default-features = false, features = ["ical"] }
+rrule = "0.14"
+regex = "1"
+fancy-regex = "0.16"
+os-spellcheck = "0.2"
+
+chrono-tz = "0.10"
