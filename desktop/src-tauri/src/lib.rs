@@ -1,12 +1,15 @@
 pub mod apple_time;
 mod audio;
+pub mod calendar;
 mod credentials;
+pub mod dictionary;
 pub mod meeting_audio;
 pub mod meetings;
 mod migrate;
 pub mod notes;
 mod platform;
 pub mod provider;
+pub mod shortcuts;
 pub mod storage;
 pub mod summary;
 
@@ -111,12 +114,15 @@ pub fn run() {
         .manage(audio::RecorderState::default())
         .manage(storage::ProfileState::default())
         .manage(meetings::MeetingState::default())
+        .manage(shortcuts::ShortcutManager::default())
+        .manage(calendar::CalendarState::default())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            calendar::boot(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.emit("openscribe-ready", ());
             }
@@ -154,7 +160,12 @@ pub fn run() {
             meetings::update_meeting,
             meetings::delete_meeting,
             meetings::export_meeting_markdown,
-            meetings::meeting_audio_path
+            meetings::meeting_audio_path,
+            dictionary::apply_dictionary,
+            shortcuts::register_shortcuts,
+            shortcuts::suspend_shortcuts,
+            calendar::calendar_refresh,
+            calendar::calendar_decision
         ])
         .run(tauri::generate_context!())
         .expect("error while running OpenScribe");

@@ -36,3 +36,10 @@ enigo = "0.3"
 
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"
+ical = { version = "0.11", default-features = false, features = ["ical"] }
+rrule = "0.14"
+regex = "1"
+fancy-regex = "0.16"
+os-spellcheck = "0.2"
+chrono-tz = "0.10"
+windows-timezones = { version = "0.5", default-features = false, features = ["std"] }
