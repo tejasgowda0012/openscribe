@@ -10,16 +10,45 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{
-      "label": "main",
-      "title": "OpenScribe",
-      "width": 1180,
-      "height": 760,
-      "minWidth": 940,
-      "minHeight": 650,
-      "center": true,
-      "decorations": true
-    }],
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenScribe",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 940,
+        "minHeight": 650,
+        "center": true,
+        "decorations": true
+      },
+      {
+        "label": "flowbar",
+        "title": "OpenScribe Flowbar",
+        "url": "flowbar.html",
+        "width": 260,
+        "height": 60,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "focus": false
+      },
+      {
+        "label": "meeting-notes",
+        "title": "Meeting notes",
+        "url": "meeting-notes.html",
+        "width": 420,
+        "height": 480,
+        "minWidth": 300,
+        "minHeight": 260,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": true
+      }
+    ],
     "security": { "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:" }
   },
   "bundle": {
