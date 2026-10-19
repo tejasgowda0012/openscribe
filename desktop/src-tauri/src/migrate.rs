@@ -166,6 +166,24 @@ pub fn legacy(root: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn failed_legacy_backup_blocks_profile_writes_and_preserves_source() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory cannot be copied as a file, giving a deterministic backup failure.
+        fs::create_dir(dir.path().join("openscribe.json")).unwrap();
+        let mut store = crate::storage::ProfileStore::open(dir.path().into());
+        assert!(store
+            .profile()
+            .storage_error
+            .unwrap()
+            .contains("Migration has not started"));
+        assert!(store.save_notes(vec![]).unwrap_err().contains("blocked"));
+        assert!(store
+            .write("settings.json", &AppSettings::default())
+            .is_err());
+        assert!(!dir.path().join("notes.json").exists());
+        assert!(dir.path().join("openscribe.json").is_dir());
+    }
+    #[test]
     fn hand_written_legacy_fixture_migrates_idempotently_without_moving_audio() {
         let root = tempfile::tempdir().unwrap();
         let fixture = r#"{"state":{"settings":{"speechProvider":"openAI","speechBaseUrl":"https://api.openai.com/v1","speechModel":"whisper-1","writingProvider":"groq","writingBaseUrl":"https://api.groq.com/openai/v1","writingModel":"llama","corrections":[{"id":"E621E1F8-C36C-495A-93FC-0C247A3E6E5F","heard":"mah","replacement":"Maha"}],"theme":"paper"},"notes":[{"id":"e621e1f8-c36c-495a-93fc-0c247a3e6e5f","createdAt":"2026-10-19T10:58:15.321Z","title":"Old title","rawText":"raw","cleanedText":"clean","duration":2,"pinned":true,"tags":["work"],"audioPath":"untouched.wav"}],"meetings":[{"id":"C621E1F8-C36C-495A-93FC-0C247A3E6E5F","createdAt":"2026-10-19T10:58:15.321Z","title":"Call","duration":5,"transcript":"Hello","summary":"Previous facts","audioPath":"untouched.wav","sourceLabel":"Mic"}]}}"#;

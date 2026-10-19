@@ -276,9 +276,19 @@ impl VoiceNote {
         let mut extra = stored.extra.clone();
         extra.extend(self.extra);
         self.extra = extra;
-        let mut extra = stored.extra.clone();
-        extra.extend(self.extra);
-        self.extra = extra;
+        // Editors from older versions may omit newer capture fields.
+        for capture in self.captures.iter_mut().flatten() {
+            if let Some(previous) = stored
+                .captures
+                .iter()
+                .flatten()
+                .find(|c| c.id == capture.id)
+            {
+                let mut extra = previous.extra.clone();
+                extra.extend(std::mem::take(&mut capture.extra));
+                capture.extra = extra;
+            }
+        }
         let known: HashSet<_> = self.captures.iter().flatten().map(|c| c.id).collect();
         let added: Vec<_> = stored
             .captures
@@ -458,5 +468,24 @@ mod tests {
         };
         assert_eq!(n.display_text(), "");
         assert_eq!(n.display_title(), "Untitled note");
+    }
+    #[test]
+    fn editor_updates_keep_unknown_note_and_capture_fields() {
+        let mut stored = VoiceNote {
+            captures: Some(vec![capture("Old", 0)]),
+            ..VoiceNote::default()
+        };
+        stored.extra.insert("futureNote".into(), Value::Bool(true));
+        stored.captures.as_mut().unwrap()[0]
+            .extra
+            .insert("futureCapture".into(), Value::Bool(true));
+        let mut edit = stored.clone();
+        edit.extra.clear();
+        let capture = &mut edit.captures.as_mut().unwrap()[0];
+        capture.extra.clear();
+        capture.text = "Updated".into();
+        let merged = edit.merging_new_captures(&stored);
+        assert_eq!(merged.extra["futureNote"], true);
+        assert_eq!(merged.captures.unwrap()[0].extra["futureCapture"], true);
     }
 }

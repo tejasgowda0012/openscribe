@@ -442,9 +442,15 @@ pub fn load_profile(
 pub fn save_settings(
     app: tauri::AppHandle,
     state: tauri::State<ProfileState>,
-    settings: AppSettings,
+    mut settings: AppSettings,
 ) -> Result<(), String> {
     with_profile(&app, &state, |s| {
+        for (key, value) in &s.settings.0 {
+            settings
+                .0
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
         s.write("settings.json", &settings)?;
         s.settings = settings;
         Ok(())
