@@ -95,6 +95,19 @@ impl ChunkWriter {
         }
         Ok(())
     }
+    pub fn append_at(&mut self, samples: &[i16], timestamp: f64) -> Result<(), String> {
+        if let Some(chunk) = &self.current {
+            let expected = chunk.descriptor.start
+                + chunk.samples as f64 / self.spec.channels as f64 / self.spec.sample_rate as f64;
+            if (timestamp - expected).abs() > 0.25 {
+                self.finish()?;
+            }
+        }
+        if self.current.is_none() {
+            self.next_start = timestamp.max(0.0);
+        }
+        self.append(samples)
+    }
     pub fn finish(&mut self) -> Result<(), String> {
         if let Some(mut chunk) = self.current.take() {
             chunk.writer.finalize().map_err(|e| e.to_string())?;
@@ -284,6 +297,7 @@ fn record(
             writer.clone(),
             error.clone(),
             level.clone(),
+            origin,
         ),
         cpal::SampleFormat::I16 => build::<i16>(
             &device,
@@ -291,6 +305,7 @@ fn record(
             writer.clone(),
             error.clone(),
             level.clone(),
+            origin,
         ),
         cpal::SampleFormat::U16 => build::<u16>(
             &device,
@@ -298,6 +313,7 @@ fn record(
             writer.clone(),
             error.clone(),
             level.clone(),
+            origin,
         ),
         format => Err(format!("Unsupported audio sample format: {format:?}")),
     }?;
@@ -361,16 +377,25 @@ fn build<T>(
     writer: Arc<Mutex<ChunkWriter>>,
     errors: Arc<Mutex<Option<String>>>,
     level: Arc<Mutex<f32>>,
+    origin: Instant,
 ) -> Result<cpal::Stream, String>
 where
     T: cpal::SizedSample,
     i16: cpal::FromSample<T>,
 {
     let error_slot = errors.clone();
+    let samples_per_second = config.channels as f64 * config.sample_rate.0 as f64;
     device
         .build_input_stream(
             config,
-            move |samples: &[T], _| {
+            move |samples: &[T], info| {
+                let timing = info.timestamp();
+                let latency = timing
+                    .callback
+                    .duration_since(&timing.capture)
+                    .unwrap_or_default();
+                let duration = samples.len() as f64 / samples_per_second;
+                let timestamp = origin.elapsed().as_secs_f64() - latency.as_secs_f64() - duration;
                 let pcm: Vec<i16> = samples
                     .iter()
                     .map(|s| cpal::Sample::from_sample(*s))
@@ -379,7 +404,7 @@ where
                     *meter = rms(&pcm);
                 }
                 if let Ok(mut w) = writer.lock() {
-                    if let Err(e) = w.append(&pcm) {
+                    if let Err(e) = w.append_at(&pcm, timestamp) {
                         if let Ok(mut slot) = errors.lock() {
                             *slot = Some(e);
                         }
@@ -493,6 +518,21 @@ pub fn upload_wav(path: &Path) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timestamp_gaps_close_partial_chunks_on_the_meeting_timeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut writer = ChunkWriter::new(dir.path().into(), 1, 10, 0.0).unwrap();
+        writer.append_at(&[0; 10], 2.0).unwrap();
+        writer.append_at(&[0; 10], 3.0).unwrap();
+        writer.append_at(&[0; 10], 12.0).unwrap();
+        writer.finish().unwrap();
+        let first: AudioChunkDescriptor =
+            read_json(&dir.path().join("chunk-00000.wav.json")).unwrap();
+        let second: AudioChunkDescriptor =
+            read_json(&dir.path().join("chunk-00001.wav.json")).unwrap();
+        assert_eq!((first.start, first.duration), (2.0, 2.0));
+        assert_eq!((second.start, second.duration), (12.0, 1.0));
+    }
     #[test]
     fn descriptors_closed_chunks_recovery_and_upload() {
         let dir = tempfile::tempdir().unwrap();
