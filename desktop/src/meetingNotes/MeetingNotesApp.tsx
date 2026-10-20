@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Camera, ExternalLink } from "lucide-react";
+import { Camera, ExternalLink, X } from "lucide-react";
 import { attachmentPath, listMeetings, loadProfile, parityEvents, updateMeeting } from "../api/parity";
 import type { MeetingRecord, NoteCapture } from "../api/parityTypes";
 import { ListenerScope } from "../listeners";
@@ -16,12 +16,17 @@ export const MeetingNotesApp: React.FC = () => {
   const [elapsed, setElapsed] = useState(0);
   const [notice, setNotice] = useState("");
   const [screenshotPaths, setScreenshotPaths] = useState<Record<string, string>>({});
+  const [screenshotHover, setScreenshotHover] = useState(false);
+  const [doneHover, setDoneHover] = useState(false);
+  const [openFullHover, setOpenFullHover] = useState(false);
+
   const recordRef = useRef<MeetingRecord | null>(null);
   const notesRef = useRef("");
   const dirtyRef = useRef(false);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const writes = useRef<Promise<unknown>>(Promise.resolve());
   const transcriptEndRef = useRef<HTMLDivElement>(null);
+
   const showError = (error: unknown) => { setNotice(String(error)); reportUiError(error); };
   const persistNotes = async () => {
     if (saveTimeoutRef.current) { clearTimeout(saveTimeoutRef.current); saveTimeoutRef.current = null; }
@@ -90,20 +95,58 @@ export const MeetingNotesApp: React.FC = () => {
         flexDirection: "column",
         width: "100%",
         height: "100vh",
-        background: "#fbf9f4",
-        color: "#181a1f",
+        background: "var(--os-background)",
+        color: "var(--os-ink)",
         fontFamily: "inherit"
       }}
     >
-      {notice && <div role="alert" style={{ padding: 12, background: "#fee2e2", color: "#991b1b" }}>{notice}</div>}
+      <style>{`
+        .os-notes-editor::placeholder {
+          color: var(--os-ink-faint);
+          opacity: 1;
+        }
+      `}</style>
+      {notice && (
+        <div
+          role="alert"
+          style={{
+            padding: "10px 18px",
+            background: "var(--os-notes-error-bg, var(--os-recording-soft))",
+            color: "var(--os-notes-error-text, var(--os-recording))",
+            borderBottom: "1px solid var(--os-line)",
+            fontSize: 12.5,
+            fontWeight: 500,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between"
+          }}
+        >
+          <span>{notice}</span>
+          <button
+            onClick={() => setNotice("")}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "inherit",
+              cursor: "pointer",
+              padding: 2,
+              display: "flex",
+              alignItems: "center"
+            }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <header
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "14px 18px",
-          borderBottom: "1px solid rgba(0,0,0,0.08)"
+          padding: "14px 18px 10px",
+          borderBottom: "1px solid var(--os-line)"
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -112,7 +155,8 @@ export const MeetingNotesApp: React.FC = () => {
               width: 8,
               height: 8,
               borderRadius: "50%",
-              background: record?.status === "paused" ? "#9ca3af" : "#ff4d4f"
+              background: record?.status === "paused" ? "var(--os-ink-faint)" : "var(--os-recording)",
+              flexShrink: 0
             }}
           />
           <h2
@@ -123,7 +167,8 @@ export const MeetingNotesApp: React.FC = () => {
               maxWidth: 180,
               overflow: "hidden",
               textOverflow: "ellipsis",
-              whiteSpace: "nowrap"
+              whiteSpace: "nowrap",
+              color: "var(--os-ink)"
             }}
           >
             {record?.title || "Meeting"}
@@ -132,7 +177,7 @@ export const MeetingNotesApp: React.FC = () => {
             style={{
               fontSize: 12,
               fontFamily: "monospace",
-              color: "#6b7280"
+              color: "var(--os-ink-faint)"
             }}
           >
             {record?.status === "paused" ? "Paused · " : ""}
@@ -142,15 +187,19 @@ export const MeetingNotesApp: React.FC = () => {
 
         <button
           onClick={openFullMeeting}
+          onMouseEnter={() => setOpenFullHover(true)}
+          onMouseLeave={() => setOpenFullHover(false)}
           title="Open the full meeting in workspace"
           style={{
-            background: "transparent",
+            background: openFullHover ? "var(--os-surface-hover)" : "transparent",
             border: "none",
-            color: "#6b7280",
+            borderRadius: 6,
+            color: openFullHover ? "var(--os-ink)" : "var(--os-ink-muted)",
             cursor: "pointer",
-            padding: 4,
+            padding: 5,
             display: "flex",
-            alignItems: "center"
+            alignItems: "center",
+            transition: "all 0.12s ease"
           }}
         >
           <ExternalLink size={14} />
@@ -158,44 +207,58 @@ export const MeetingNotesApp: React.FC = () => {
       </header>
 
       {/* Tabs */}
-      <div
-        style={{
-          display: "flex",
-          gap: 16,
-          padding: "8px 18px",
-          borderBottom: "1px solid rgba(0,0,0,0.06)",
-          fontSize: 12.5,
-          fontWeight: 500
-        }}
-      >
-        <button
-          onClick={() => setTab("notes")}
+      <div style={{ padding: "10px 18px 6px" }}>
+        <div
+          role="tablist"
           style={{
-            background: "transparent",
-            border: "none",
-            borderBottom: tab === "notes" ? "2px solid #2563eb" : "2px solid transparent",
-            color: tab === "notes" ? "#2563eb" : "#6b7280",
-            padding: "4px 2px",
-            cursor: "pointer",
-            fontWeight: tab === "notes" ? 600 : 500
+            display: "inline-flex",
+            gap: 2,
+            padding: 3,
+            background: "var(--os-surface-muted)",
+            borderRadius: 10
           }}
         >
-          My notes
-        </button>
-        <button
-          onClick={() => setTab("transcript")}
-          style={{
-            background: "transparent",
-            border: "none",
-            borderBottom: tab === "transcript" ? "2px solid #2563eb" : "2px solid transparent",
-            color: tab === "transcript" ? "#2563eb" : "#6b7280",
-            padding: "4px 2px",
-            cursor: "pointer",
-            fontWeight: tab === "transcript" ? 600 : 500
-          }}
-        >
-          Transcript
-        </button>
+          <button
+            role="tab"
+            aria-selected={tab === "notes"}
+            onClick={() => setTab("notes")}
+            style={{
+              background: tab === "notes" ? "var(--os-surface)" : "transparent",
+              color: tab === "notes" ? "var(--os-ink)" : "var(--os-ink-muted)",
+              border: "none",
+              borderRadius: 7,
+              padding: "5px 14px",
+              fontSize: 12,
+              fontWeight: tab === "notes" ? 600 : 500,
+              cursor: "pointer",
+              boxShadow: tab === "notes" ? "var(--os-notes-shadow)" : "none",
+              transition: "all 0.15s ease",
+              fontFamily: "inherit"
+            }}
+          >
+            My notes
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === "transcript"}
+            onClick={() => setTab("transcript")}
+            style={{
+              background: tab === "transcript" ? "var(--os-surface)" : "transparent",
+              color: tab === "transcript" ? "var(--os-ink)" : "var(--os-ink-muted)",
+              border: "none",
+              borderRadius: 7,
+              padding: "5px 14px",
+              fontSize: 12,
+              fontWeight: tab === "transcript" ? 600 : 500,
+              cursor: "pointer",
+              boxShadow: tab === "transcript" ? "var(--os-notes-shadow)" : "none",
+              transition: "all 0.15s ease",
+              fontFamily: "inherit"
+            }}
+          >
+            Transcript
+          </button>
+        </div>
       </div>
 
       {/* Content Area */}
@@ -203,7 +266,7 @@ export const MeetingNotesApp: React.FC = () => {
         style={{
           flex: 1,
           overflowY: "auto",
-          padding: "14px 18px",
+          padding: "10px 18px 14px",
           display: "flex",
           flexDirection: "column"
         }}
@@ -214,6 +277,7 @@ export const MeetingNotesApp: React.FC = () => {
               value={notes}
               onChange={(e) => handleNotesChange(e.target.value)}
               placeholder="Jot down what matters. Your notes guide the summary."
+              className="os-notes-editor"
               style={{
                 width: "100%",
                 flex: 1,
@@ -223,7 +287,8 @@ export const MeetingNotesApp: React.FC = () => {
                 resize: "none",
                 fontSize: 14,
                 lineHeight: 1.6,
-                color: "#181a1f",
+                color: "var(--os-ink)",
+                caretColor: "var(--os-accent)",
                 fontFamily: "inherit"
               }}
             />
@@ -236,7 +301,7 @@ export const MeetingNotesApp: React.FC = () => {
                   gap: 8,
                   overflowX: "auto",
                   paddingTop: 8,
-                  borderTop: "1px solid rgba(0,0,0,0.06)"
+                  borderTop: "1px solid var(--os-line)"
                 }}
               >
                 {Object.entries(screenshotPaths).map(([name, src]) => (
@@ -247,7 +312,7 @@ export const MeetingNotesApp: React.FC = () => {
                     style={{
                       height: 54,
                       borderRadius: 6,
-                      border: "1px solid rgba(0,0,0,0.1)",
+                      border: "1px solid var(--os-line)",
                       objectFit: "cover"
                     }}
                   />
@@ -258,7 +323,7 @@ export const MeetingNotesApp: React.FC = () => {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {passages.length === 0 ? (
-              <p style={{ color: "#9ca3af", fontSize: 13, margin: 0 }}>
+              <p style={{ color: "var(--os-ink-faint)", fontSize: 13, margin: 0 }}>
                 {record?.liveTranscription
                   ? "Listening… text appears here as you talk."
                   : "Live transcription is off. The transcript is created when you stop."}
@@ -273,7 +338,7 @@ export const MeetingNotesApp: React.FC = () => {
                         style={{
                           fontSize: 11,
                           fontWeight: 600,
-                          color: isMic ? "#2563eb" : "#16a34a"
+                          color: isMic ? "var(--os-accent)" : "var(--os-success)"
                         }}
                       >
                         {isMic
@@ -284,13 +349,13 @@ export const MeetingNotesApp: React.FC = () => {
                         style={{
                           fontSize: 11,
                           fontFamily: "monospace",
-                          color: "#9ca3af"
+                          color: "var(--os-ink-faint)"
                         }}
                       >
                         {formatTimestamp(passage.start)}
                       </span>
                     </div>
-                    <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5 }}>
+                    <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5, color: "var(--os-ink)" }}>
                       {passage.text}
                     </p>
                   </div>
@@ -309,25 +374,28 @@ export const MeetingNotesApp: React.FC = () => {
           alignItems: "center",
           justifyContent: "space-between",
           padding: "10px 18px",
-          borderTop: "1px solid rgba(0,0,0,0.08)",
-          background: "#f4f1ea"
+          borderTop: "1px solid var(--os-line)",
+          background: "var(--os-surface)"
         }}
       >
         <button
           onClick={handleTakeScreenshot}
+          onMouseEnter={() => setScreenshotHover(true)}
+          onMouseLeave={() => setScreenshotHover(false)}
           title="Add a screenshot to this meeting"
           style={{
             display: "flex",
             alignItems: "center",
             gap: 6,
-            background: "transparent",
-            border: "1px solid rgba(0,0,0,0.12)",
-            borderRadius: 6,
-            padding: "5px 10px",
+            background: screenshotHover ? "var(--os-surface-hover)" : "transparent",
+            border: "1px solid var(--os-line)",
+            borderRadius: 7,
+            padding: "5px 12px",
             fontSize: 12,
             fontWeight: 500,
             cursor: "pointer",
-            color: "#374151"
+            color: "var(--os-ink)",
+            transition: "all 0.12s ease"
           }}
         >
           <Camera size={13} />
@@ -336,16 +404,21 @@ export const MeetingNotesApp: React.FC = () => {
 
         <button
           onClick={handleDone}
+          onMouseEnter={() => setDoneHover(true)}
+          onMouseLeave={() => setDoneHover(false)}
           title="Close notes. The meeting keeps recording."
           style={{
-            background: "#2563eb",
-            color: "#ffffff",
+            background: "var(--os-accent)",
+            color: "var(--os-primary-text)",
             border: "none",
-            borderRadius: 6,
-            padding: "5px 16px",
+            borderRadius: 7,
+            padding: "5px 18px",
             fontSize: 12,
             fontWeight: 600,
-            cursor: "pointer"
+            cursor: "pointer",
+            boxShadow: "var(--os-notes-shadow)",
+            opacity: doneHover ? 0.92 : 1,
+            transition: "all 0.12s ease"
           }}
         >
           Done
