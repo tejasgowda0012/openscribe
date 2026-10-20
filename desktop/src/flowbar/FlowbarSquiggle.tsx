@@ -13,7 +13,7 @@ interface FlowbarSquiggleProps {
 export const FlowbarSquiggle: React.FC<FlowbarSquiggleProps> = ({
   level = 0.15,
   motion = "still",
-  color = "rgba(255, 250, 230, 0.9)",
+  color = "var(--os-flowbar-ink)",
   width = 40,
   height = 16
 }) => {

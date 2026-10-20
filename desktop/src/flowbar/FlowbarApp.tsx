@@ -12,8 +12,71 @@ import { FlowbarSquiggle } from "./FlowbarSquiggle";
 import { NoticeBubble } from "./NoticeBubble";
 
 export type FlowbarMode = "idle" | "idleExpanded" | "dictating" | "processing" | "meeting" | "meetingSaving";
-const buttonStyle: React.CSSProperties = { background: "transparent", border: 0, color: "inherit", padding: 3, display: "flex", alignItems: "center", gap: 6, cursor: "pointer", font: "inherit" };
-const menuStyle: React.CSSProperties = { position: "absolute", background: "#14171f", color: "#fffaf0", border: "1px solid #454851", borderRadius: 10, padding: 8, display: "flex", flexDirection: "column", gap: 4, fontSize: 12, zIndex: 20, boxShadow: "0 4px 12px #0005" };
+
+const FlowbarIconButton: React.FC<{
+  onClick: (e: React.MouseEvent) => void;
+  title: string;
+  color?: string;
+  children: React.ReactNode;
+}> = ({ onClick, title, color, children }) => {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: hover ? "var(--os-flowbar-hover)" : "transparent",
+        border: 0,
+        borderRadius: 999,
+        color: color ?? "inherit",
+        padding: 4,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        font: "inherit",
+        transition: "background 0.12s ease"
+      }}
+    >
+      {children}
+    </button>
+  );
+};
+
+const FlowbarMenuItem: React.FC<{
+  onClick: () => void;
+  children: React.ReactNode;
+}> = ({ onClick, children }) => {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: hover ? "var(--os-flowbar-hover)" : "transparent",
+        border: 0,
+        borderRadius: 6,
+        color: "var(--os-flowbar-ink)",
+        padding: "6px 8px",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        cursor: "pointer",
+        font: "inherit",
+        fontSize: 12,
+        fontWeight: 500,
+        width: "100%",
+        textAlign: "left",
+        transition: "background 0.12s ease"
+      }}
+    >
+      {children}
+    </button>
+  );
+};
 
 export const FlowbarApp: React.FC = () => {
   const [settings, setSettings] = useState<ParitySettings | null>(null);
@@ -91,36 +154,76 @@ export const FlowbarApp: React.FC = () => {
       onMouseEnter={() => { if (hoverTimer.current) clearTimeout(hoverTimer.current); setHovering(true); }}
       onMouseLeave={() => { hoverTimer.current = setTimeout(() => { setHovering(false); }, 350); }}
       onContextMenu={event => { event.preventDefault(); setMenuOpen(!menuOpen); }}
-      style={{ position: "absolute", left: pillCenter.x - pillWidth / 2, top: pillCenter.y - pillHeight / 2,
-        width: pillWidth, height: pillHeight, borderRadius: 999, color: "#fffaf0", background: mode === "idle" ? "#d2cdbc99" : "#14171f",
-        boxShadow: mode === "idle" ? undefined : "0 4px 12px #0005", display: "flex", flexDirection: vertical ? "column" : "row", alignItems: "center", justifyContent: "space-evenly", cursor: "grab" }}>
+      style={{
+        position: "absolute",
+        left: pillCenter.x - pillWidth / 2,
+        top: pillCenter.y - pillHeight / 2,
+        width: pillWidth,
+        height: pillHeight,
+        borderRadius: 999,
+        color: "var(--os-flowbar-ink)",
+        background: mode === "idle" ? "var(--os-flowbar-idle-fill)" : "var(--os-flowbar)",
+        border: mode === "idle" ? "0.5px solid var(--os-flowbar-idle-line)" : "1px solid var(--os-flowbar-line)",
+        boxShadow: mode === "idle" ? undefined : "var(--os-flowbar-shadow)",
+        display: "flex",
+        flexDirection: vertical ? "column" : "row",
+        alignItems: "center",
+        justifyContent: "space-evenly",
+        cursor: "grab",
+        boxSizing: "border-box"
+      }}>
       {mode === "idle" && <div onClick={() => send("dictate")} title="Dictate · drag to move" style={{ width: "100%", height: "100%" }} />}
       {mode === "idleExpanded" && <>
-        <button style={buttonStyle} onClick={() => send("dictate")} title="Dictate"><Mic size={15} /></button>
-        <button style={buttonStyle} onClick={() => send("meeting")} title="Start meeting"><Users size={15} /></button>
-        <button style={buttonStyle} onClick={() => setScreenshotMenuOpen(!screenshotMenuOpen)} title="Screenshot"><Camera size={15} /></button>
+        <FlowbarIconButton onClick={() => send("dictate")} title="Dictate"><Mic size={15} /></FlowbarIconButton>
+        <FlowbarIconButton onClick={() => send("meeting")} title="Start meeting"><Users size={15} /></FlowbarIconButton>
+        <FlowbarIconButton onClick={() => setScreenshotMenuOpen(!screenshotMenuOpen)} title="Screenshot"><Camera size={15} /></FlowbarIconButton>
       </>}
       {mode === "dictating" && <>
         <FlowbarSquiggle width={42} height={16} level={level} motion={phase === "starting" ? "flowing" : "live"} />
-        <button style={{ ...buttonStyle, color: "#ff6366" }} onClick={() => send("dictate")} title="Stop and save"><Square size={13} fill="currentColor" /></button>
+        <FlowbarIconButton color="var(--os-flowbar-recording)" onClick={() => send("dictate")} title="Stop and save"><Square size={13} fill="currentColor" /></FlowbarIconButton>
       </>}
-      {(mode === "processing" || mode === "meetingSaving") && <FlowbarSquiggle width={64} height={16} motion="flowing" color="#f0b864" />}
+      {(mode === "processing" || mode === "meetingSaving") && <FlowbarSquiggle width={64} height={16} motion="flowing" color="var(--os-flowbar-accent)" />}
       {mode === "meeting" && <>
-        <button style={buttonStyle} onClick={() => { void openMeetingNotes(); }} title="Meeting notes"><FlowbarSquiggle width={30} height={16} level={level} motion={activeMeeting?.status === "paused" ? "still" : "live"} /></button>
+        <FlowbarIconButton onClick={() => { void openMeetingNotes(); }} title="Meeting notes">
+          <FlowbarSquiggle width={30} height={16} level={level} motion={activeMeeting?.status === "paused" ? "still" : "live"} />
+        </FlowbarIconButton>
         {hovering && <>
-          <button style={buttonStyle} onClick={() => { void openMeetingNotes(); }} title="My notes"><FileText size={13} /></button>
-          <button style={buttonStyle} onClick={() => screenshot("area")} title="Screenshot"><Camera size={13} /></button>
-          <button style={buttonStyle} onClick={() => send("pauseMeeting")} title={activeMeeting?.status === "paused" ? "Resume" : "Pause"}>{activeMeeting?.status === "paused" ? <Play size={13} /> : <Pause size={13} />}</button>
+          <FlowbarIconButton onClick={() => { void openMeetingNotes(); }} title="My notes"><FileText size={13} /></FlowbarIconButton>
+          <FlowbarIconButton onClick={() => screenshot("area")} title="Screenshot"><Camera size={13} /></FlowbarIconButton>
+          <FlowbarIconButton onClick={() => send("pauseMeeting")} title={activeMeeting?.status === "paused" ? "Resume" : "Pause"}>
+            {activeMeeting?.status === "paused" ? <Play size={13} /> : <Pause size={13} />}
+          </FlowbarIconButton>
         </>}
-        <button style={{ ...buttonStyle, color: "#ff6366" }} onClick={() => send("meeting")} title="Stop meeting"><Square size={11} fill="currentColor" /></button>
+        <FlowbarIconButton color="var(--os-flowbar-recording)" onClick={() => send("meeting")} title="Stop meeting"><Square size={11} fill="currentColor" /></FlowbarIconButton>
       </>}
     </div>
-    {(menuOpen || screenshotMenuOpen) && <div style={{ ...menuStyle, width: 174, left: Math.max(6, Math.min(windowWidth - 190, pillCenter.x - 87)), top: above ? undefined : pillCenter.y + pillHeight / 2 + 8, bottom: above ? windowHeight - pillCenter.y + pillHeight / 2 + 8 : undefined }}
+    {(menuOpen || screenshotMenuOpen) && <div style={{
+      position: "absolute",
+      background: "var(--os-flowbar)",
+      color: "var(--os-flowbar-ink)",
+      border: "1px solid var(--os-flowbar-line)",
+      borderRadius: 10,
+      padding: 6,
+      display: "flex",
+      flexDirection: "column",
+      gap: 2,
+      fontSize: 12,
+      zIndex: 20,
+      boxShadow: "var(--os-flowbar-shadow)",
+      width: 174,
+      left: Math.max(6, Math.min(windowWidth - 190, pillCenter.x - 87)),
+      top: above ? undefined : pillCenter.y + pillHeight / 2 + 8,
+      bottom: above ? windowHeight - pillCenter.y + pillHeight / 2 + 8 : undefined
+    }}
       onMouseEnter={() => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }}>
-      {screenshotMenuOpen ? (["area", "window", "screen"] as const).map(kind => <button key={kind} style={buttonStyle} onClick={() => screenshot(kind)}>{kind[0].toUpperCase() + kind.slice(1)} screenshot</button>) : <>
-        <button style={buttonStyle} onClick={() => openMain("notes")}>Today’s note</button>
-        <button style={buttonStyle} onClick={() => openMain("settings")}>Settings and shortcuts</button>
-        <button style={buttonStyle} onClick={() => { setMenuOpen(false); void getCurrentWindow().hide().catch(reportUiError); }}>Hide Flowbar</button>
+      {screenshotMenuOpen ? (["area", "window", "screen"] as const).map(kind => (
+        <FlowbarMenuItem key={kind} onClick={() => screenshot(kind)}>
+          {kind[0].toUpperCase() + kind.slice(1)} screenshot
+        </FlowbarMenuItem>
+      )) : <>
+        <FlowbarMenuItem onClick={() => openMain("notes")}>Today’s note</FlowbarMenuItem>
+        <FlowbarMenuItem onClick={() => openMain("settings")}>Settings and shortcuts</FlowbarMenuItem>
+        <FlowbarMenuItem onClick={() => { setMenuOpen(false); void getCurrentWindow().hide().catch(reportUiError); }}>Hide Flowbar</FlowbarMenuItem>
       </>}
     </div>}
   </div>;

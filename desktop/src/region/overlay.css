@@ -1,12 +1,15 @@
+@import "../theme.css";
+
 html,
 body {
   margin: 0;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: transparent;
+  background: transparent !important;
   cursor: crosshair;
   user-select: none;
+  -webkit-user-select: none;
 }
 
 #shade,
@@ -18,15 +21,15 @@ body {
 #shade {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--os-region-shade);
 }
 
 #selection {
   position: fixed;
   box-sizing: border-box;
-  border: 1.5px solid #ffffff;
+  border: 1.5px solid var(--os-region-border);
   background: transparent;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 0 0 9999px var(--os-region-shade);
 }
 
 #hint {
@@ -35,9 +38,13 @@ body {
   left: 50%;
   transform: translateX(-50%);
   margin: 0;
-  padding: 6px 12px;
+  padding: 6px 14px;
   border-radius: 999px;
-  background: rgba(20, 20, 20, 0.72);
-  color: #ffffff;
-  font: 13px/1.2 "Segoe UI", sans-serif;
+  background: var(--os-region-hint-bg);
+  color: var(--os-region-hint-text);
+  font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: var(--os-region-shadow);
 }
