@@ -109,12 +109,12 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className="ui-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>
             Keyboard Shortcuts
           </h3>
-          <p style={{ fontSize: 13, color: "#6b7280", margin: 0 }}>
+          <p style={{ fontSize: 13, color: "var(--os-ink-muted)", margin: 0 }}>
             Global hotkeys that work from any application on your PC.
           </p>
         </div>
@@ -122,7 +122,7 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
           onClick={handleRestoreDefaults}
           style={{
             background: "transparent",
-            border: "1px solid rgba(0,0,0,0.12)",
+            border: "1px solid var(--os-line)",
             borderRadius: 6,
             padding: "5px 10px",
             fontSize: 12,
@@ -140,8 +140,8 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
       {conflicts.size > 0 && (
         <div
           style={{
-            background: "#fef3c7",
-            border: "1px solid #fde68a",
+            background: "var(--os-warning-soft)",
+            border: "1px solid var(--os-line)",
             borderRadius: 8,
             padding: "10px 14px",
             display: "flex",
@@ -149,8 +149,8 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
             gap: 10
           }}
         >
-          <AlertTriangle size={18} color="#d97706" />
-          <span style={{ fontSize: 12.5, color: "#92400e" }}>
+          <AlertTriangle size={18} color="var(--os-warning)" />
+          <span style={{ fontSize: 12.5, color: "var(--os-ink)" }}>
             Some shortcuts have conflicting key combinations. Please assign distinct hotkeys.
           </span>
         </div>
@@ -159,8 +159,8 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
       {/* Actions List */}
       <div
         style={{
-          background: "#ffffff",
-          border: "1px solid rgba(0,0,0,0.1)",
+          background: "var(--os-surface)",
+          border: "1px solid var(--os-line)",
           borderRadius: 10,
           overflow: "hidden"
         }}
@@ -176,26 +176,27 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
               key={action}
               style={{
                 display: "flex",
+                flexWrap: "wrap", gap: 12,
                 alignItems: "center",
                 justifyContent: "space-between",
                 padding: "12px 16px",
                 borderBottom:
                   idx === Object.keys(ACTION_DESCRIPTIONS).length - 1
                     ? "none"
-                    : "1px solid rgba(0,0,0,0.06)",
-                background: isRecording ? "#f0f7ff" : "transparent"
+                    : "1px solid var(--os-line)",
+                background: isRecording ? "var(--os-accent-soft)" : "transparent"
               }}
             >
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <strong style={{ fontSize: 13.5 }}>{info.title}</strong>
                   {hasConflict && (
-                    <span style={{ fontSize: 11, color: "#d97706", fontWeight: 600 }}>
+                    <span style={{ fontSize: 11, color: "var(--os-ink)", fontWeight: 600 }}>
                       (Conflict)
                     </span>
                   )}
                 </div>
-                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
                   {isRecording ? "Press the new keys on your keyboard. Esc cancels." : info.detail}
                 </span>
               </div>
@@ -203,14 +204,14 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span
                   style={{
-                    background: hasConflict ? "#fee2e2" : "#f3f4f6",
-                    border: hasConflict ? "1px solid #fca5a5" : "1px solid rgba(0,0,0,0.1)",
+                    background: hasConflict ? "var(--os-recording-soft)" : "var(--os-surface-muted)",
+                    border: hasConflict ? "1px solid var(--os-line)" : "1px solid var(--os-line)",
                     borderRadius: 6,
                     padding: "3px 8px",
                     fontFamily: "monospace",
                     fontSize: 12,
                     fontWeight: 600,
-                    color: isRecording ? "#2563eb" : "#374151"
+                    color: isRecording ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink)"
                   }}
                 >
                   {isRecording ? "Listening…" : binding?.display ?? "Not set"}
@@ -219,9 +220,9 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
                 <button
                   onClick={() => setRecordingAction(isRecording ? null : action)}
                   style={{
-                    background: isRecording ? "#2563eb" : "#ffffff",
-                    color: isRecording ? "#ffffff" : "#374151",
-                    border: "1px solid rgba(0,0,0,0.15)",
+                    background: isRecording ? "var(--os-accent)" : "var(--os-surface)",
+                    color: isRecording ? "var(--os-surface)" : "var(--os-ink)",
+                    border: "1px solid var(--os-line)",
                     borderRadius: 6,
                     padding: "4px 10px",
                     fontSize: 12,

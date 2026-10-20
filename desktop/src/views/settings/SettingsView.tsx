@@ -6,6 +6,7 @@ import {
   Lock,
   Mic,
   Moon,
+  Monitor,
   Network,
   RotateCcw,
   Sliders,
@@ -20,6 +21,7 @@ import { ProvidersSettings } from "./ProvidersSettings";
 import { CalendarSettings } from "./CalendarSettings";
 import { PersonalizationSettings } from "./PersonalizationSettings";
 import { ShortcutsSettings } from "./ShortcutsSettings";
+import { ConfirmDialog } from "../ConfirmDialog";
 
 interface SettingsViewProps {
   settings: ParitySettings;
@@ -46,6 +48,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     "general" | "providers" | "shortcuts" | "personalize" | "calendar" | "privacy"
   >(initialSection);
 
+  const [confirmClear, setConfirmClear] = useState(false);
+
   const updateSetting = <K extends keyof ParitySettings>(
     key: K,
     val: ParitySettings[K]
@@ -55,13 +59,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
+    <div className="settings-workspace" style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
       {/* Subnav sidebar */}
       <div
+        className="settings-navigation"
         style={{
-          width: 220,
-          borderRight: "1px solid rgba(0,0,0,0.08)",
-          background: "#faf8f4",
+          width: 220, flexShrink: 0,
+          borderRight: "1px solid var(--os-line)",
+          background: "var(--os-background)",
           padding: "20px 12px",
           display: "flex",
           flexDirection: "column",
@@ -82,6 +87,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         ].map(({ id, label, icon: Icon }) => (
           <button
             key={id}
+            aria-current={section === id ? "page" : undefined}
             onClick={() => setSection(id as any)}
             style={{
               display: "flex",
@@ -89,8 +95,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               gap: 8,
               padding: "8px 12px",
               borderRadius: 6,
-              background: section === id ? "#e0e7ff" : "transparent",
-              color: section === id ? "#2563eb" : "#374151",
+              background: section === id ? "var(--os-accent-soft)" : "transparent",
+              color: section === id ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink)",
               border: "none",
               cursor: "pointer",
               fontSize: 13,
@@ -104,15 +110,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         ))}
       </div>
 
+      {confirmClear && (
+        <ConfirmDialog title="Clear note history?" confirmLabel="Delete all notes" onCancel={() => setConfirmClear(false)} onConfirm={() => { onClearNotesHistory?.(); setConfirmClear(false); }}>
+          All local notes will be permanently deleted.
+        </ConfirmDialog>
+      )}
+
       {/* Main content pane */}
-      <div style={{ flex: 1, height: "100%", overflowY: "auto", padding: "28px 36px" }}>
+      <div className="settings-content" style={{ flex: 1, minWidth: 0, minHeight: 0, height: "100%", overflowY: "auto", padding: "28px 36px" }}>
         {section === "general" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 24, maxWidth: 650 }}>
             {/* Appearance */}
             <div
               style={{
-                background: "#ffffff",
-                border: "1px solid rgba(0,0,0,0.1)",
+                background: "var(--os-surface)",
+                border: "1px solid var(--os-line)",
                 borderRadius: 10,
                 padding: "16px 20px"
               }}
@@ -120,48 +132,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: "0 0 10px" }}>
                 Appearance
               </h4>
-              <div style={{ display: "flex", gap: 10 }}>
-                <button
-                  onClick={() => updateSetting("theme", "light")}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "8px 16px",
-                    borderRadius: 6,
-                    border: settings.theme === "light" ? "2px solid #2563eb" : "1px solid rgba(0,0,0,0.15)",
-                    background: "#ffffff",
-                    cursor: "pointer",
-                    fontWeight: 500
-                  }}
-                >
-                  <Sun size={14} /> Light
-                </button>
-                <button
-                  onClick={() => updateSetting("theme", "dark")}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "8px 16px",
-                    borderRadius: 6,
-                    border: settings.theme === "dark" ? "2px solid #2563eb" : "1px solid rgba(0,0,0,0.15)",
-                    background: "#181a1f",
-                    color: "#fff",
-                    cursor: "pointer",
-                    fontWeight: 500
-                  }}
-                >
-                  <Moon size={14} /> Dark
-                </button>
+              <div className="appearance-options" role="group" aria-label="Appearance">
+                {([
+                  { value: "system", label: "System", icon: Monitor },
+                  { value: "light", label: "Light", icon: Sun },
+                  { value: "dark", label: "Dark", icon: Moon }
+                ] as const).map(({ value, label, icon: Icon }) => (
+                  <button
+                    key={value}
+                    aria-pressed={settings.theme === value}
+                    onClick={() => updateSetting("theme", value)}
+                    className="appearance-option"
+                  >
+                    <Icon size={14} /> {label}
+                  </button>
+                ))}
               </div>
             </div>
 
             {/* Flowbar Settings */}
             <div
               style={{
-                background: "#ffffff",
-                border: "1px solid rgba(0,0,0,0.1)",
+                background: "var(--os-surface)",
+                border: "1px solid var(--os-line)",
                 borderRadius: 10,
                 padding: "16px 20px",
                 display: "flex",
@@ -172,12 +165,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>
                 Flowbar Behavior
               </h4>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
                   <strong style={{ fontSize: 13, display: "block" }}>
                     Keep on screen when idle
                   </strong>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>
+                  <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
                     Shows a quiet sliver when idle so it's always ready.
                   </span>
                 </div>
@@ -188,14 +181,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               </div>
 
-              <div style={{ height: 1, background: "rgba(0,0,0,0.06)" }} />
+              <div style={{ height: 1, background: "var(--os-line)" }} />
 
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
                   <strong style={{ fontSize: 13, display: "block" }}>
                     Default Position
                   </strong>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>
+                  <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
                     Where the Flowbar sits when not dragged manually.
                   </span>
                 </div>
@@ -212,7 +205,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   style={{
                     padding: "5px 10px",
                     borderRadius: 6,
-                    border: "1px solid rgba(0,0,0,0.15)",
+                    border: "1px solid var(--os-line)",
                     fontSize: 12.5
                   }}
                 >
@@ -229,8 +222,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <button
                     onClick={onRevealFlowbar}
                     style={{
-                      background: "#f3f4f6",
-                      border: "1px solid rgba(0,0,0,0.1)",
+                      background: "var(--os-surface-muted)",
+                      border: "1px solid var(--os-line)",
                       borderRadius: 6,
                       padding: "5px 12px",
                       fontSize: 12,
@@ -246,8 +239,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             {/* Dictation options */}
             <div
               style={{
-                background: "#ffffff",
-                border: "1px solid rgba(0,0,0,0.1)",
+                background: "var(--os-surface)",
+                border: "1px solid var(--os-line)",
                 borderRadius: 10,
                 padding: "16px 20px",
                 display: "flex",
@@ -258,12 +251,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>
                 Dictation & Audio
               </h4>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
                   <strong style={{ fontSize: 13, display: "block" }}>
                     Paste into focused app
                   </strong>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>
+                  <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
                     Immediately pastes your finalized transcription into the active window.
                   </span>
                 </div>
@@ -274,14 +267,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               </div>
 
-              <div style={{ height: 1, background: "rgba(0,0,0,0.06)" }} />
+              <div style={{ height: 1, background: "var(--os-line)" }} />
 
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
                   <strong style={{ fontSize: 13, display: "block" }}>
                     Interaction sounds
                   </strong>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>
+                  <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
                     Plays subtle chimes on start and finish.
                   </span>
                 </div>
@@ -317,8 +310,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 650 }}>
             <div
               style={{
-                background: "#ffffff",
-                border: "1px solid rgba(0,0,0,0.1)",
+                background: "var(--os-surface)",
+                border: "1px solid var(--os-line)",
                 borderRadius: 10,
                 padding: "16px 20px"
               }}
@@ -326,22 +319,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: "0 0 6px" }}>
                 Local Data & Privacy
               </h4>
-              <p style={{ fontSize: 12.5, color: "#6b7280", margin: "0 0 16px" }}>
+              <p style={{ fontSize: 12.5, color: "var(--os-ink-muted)", margin: "0 0 16px" }}>
                 Your notes, screenshots, and meeting recordings are stored on this device.
                 OpenScribe never syncs your data to any cloud service.
               </p>
 
               {onClearNotesHistory && (
                 <button
-                  onClick={() => {
-                    if (confirm("Are you sure you want to permanently delete all local notes?")) {
-                      onClearNotesHistory();
-                    }
-                  }}
+                  onClick={() => setConfirmClear(true)}
                   style={{
-                    background: "rgba(239, 68, 68, 0.1)",
-                    border: "1px solid rgba(239, 68, 68, 0.25)",
-                    color: "#dc2626",
+                    background: "var(--os-recording-soft)",
+                    border: "1px solid var(--os-line)",
+                    color: "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))",
                     borderRadius: 6,
                     padding: "6px 12px",
                     fontSize: 12,
