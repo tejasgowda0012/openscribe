@@ -54,6 +54,7 @@ import {
 
 import { reportUiError, sendIntent } from "../../workspaceEvents";
 import { MeetingRecordings } from "./MeetingRecordings";
+import { ConfirmDialog } from "../ConfirmDialog";
 
 interface MeetingsViewProps {
   meetings: MeetingRecord[];
@@ -79,7 +80,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
   const [transcriptSearch, setTranscriptSearch] = useState("");
   const [trackFilter, setTrackFilter] = useState<"all" | "microphone" | "system">("all");
   const [startDropdown, setStartDropdown] = useState(false);
-  const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [confirmDiscardAll, setConfirmDiscardAll] = useState(false);
+  const citationTarget = useRef<HTMLDivElement>(null);
   const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | null>(null);
 
   const [drafts, setDrafts] = useState<Record<string, MeetingRecord>>({});
@@ -176,23 +178,34 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
   };
 
   const jumpToCitation = (sourceId: string) => {
+    setTranscriptSearch("");
+    setTrackFilter("all");
     setTab("transcript");
     setHighlightedSegmentId(sourceId);
-    window.setTimeout(() => setHighlightedSegmentId(null), 3000);
   };
 
+  useEffect(() => {
+    if (!highlightedSegmentId) return;
+    citationTarget.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const timer = window.setTimeout(() => setHighlightedSegmentId(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [highlightedSegmentId]);
+
+  useEffect(() => { setTranscriptSearch(""); setTrackFilter("all"); setHighlightedSegmentId(null); }, [selectedRecord?.id]);
   const isActive = selectedRecord?.id === activeMeetingId;
+  const isProcessing = selectedRecord?.status === "transcribing" || selectedRecord?.status === "summarizing";
 
   return (
     <div style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
       {/* Left Sidebar List */}
       <div
+        className="library-pane"
         style={{
-          width: 290,
-          borderRight: "1px solid rgba(0,0,0,0.08)",
+          width: 290, flexShrink: 0,
+          borderRight: "1px solid var(--os-line)",
           display: "flex",
           flexDirection: "column",
-          background: "#faf8f4"
+          background: "var(--os-background)"
         }}
       >
         {/* Header */}
@@ -207,12 +220,13 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
           <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0, letterSpacing: "-0.03em" }}>
             Meetings
           </h2>
-          <div style={{ position: "relative" }}>
+          <div style={{ position: "relative" }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setStartDropdown(false); }} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setStartDropdown(false); } }}>
             <button
+              aria-expanded={startDropdown}
               onClick={() => setStartDropdown((p) => !p)}
               style={{
-                background: "#2563eb",
-                color: "#ffffff",
+                background: "var(--os-accent)",
+                color: "var(--os-primary-text)",
                 border: "none",
                 borderRadius: 6,
                 padding: "5px 10px",
@@ -233,19 +247,19 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   position: "absolute",
                   top: 32,
                   right: 0,
-                  background: "#ffffff",
-                  border: "1px solid rgba(0,0,0,0.12)",
+                  background: "var(--os-surface)",
+                  border: "1px solid var(--os-line)",
                   borderRadius: 8,
                   padding: 8,
-                  width: 220,
+                  width: 220, flexShrink: 0,
                   zIndex: 60,
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+                  boxShadow: "var(--os-shadow)",
                   display: "flex",
                   flexDirection: "column",
                   gap: 6
                 }}
               >
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", padding: "2px 4px" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--os-ink-muted)", padding: "2px 4px" }}>
                   RECORDING SOURCES
                 </div>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
@@ -268,7 +282,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   />
                   System audio
                 </label>
-                <div style={{ height: 1, background: "rgba(0,0,0,0.06)", margin: "4px 0" }} />
+                <div style={{ height: 1, background: "var(--os-line)", margin: "4px 0" }} />
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
                   <input
                     type="checkbox"
@@ -290,10 +304,11 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   Transcribe & summarize on stop
                 </label>
                 <button
+                  disabled={!!activeMeetingId || (!settings.meetingMicrophone && !settings.meetingSystemAudio)}
                   onClick={handleStartMeeting}
                   style={{
-                    background: "#2563eb",
-                    color: "#ffffff",
+                    background: "var(--os-accent)",
+                    color: "var(--os-primary-text)",
                     border: "none",
                     borderRadius: 6,
                     padding: "6px",
@@ -317,13 +332,13 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
               display: "flex",
               alignItems: "center",
               gap: 8,
-              background: "#ffffff",
-              border: "1px solid rgba(0,0,0,0.1)",
+              background: "var(--os-surface)",
+              border: "1px solid var(--os-line)",
               borderRadius: 8,
               padding: "6px 10px"
             }}
           >
-            <Search size={14} color="#9ca3af" />
+            <Search size={14} color="var(--os-ink-muted)" />
             <input
               type="text"
               value={search}
@@ -341,7 +356,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
         </div>
 
         {/* Groups */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 8px 16px" }}>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", padding: "0 8px 16px" }}>
+          {Object.keys(groupedMeetings).length === 0 && <p className="list-empty" role="status">{search.trim() ? "No matching meetings" : "No meetings yet"}</p>}
           {Object.entries(groupedMeetings).map(([groupTitle, list]) => (
             <div key={groupTitle} style={{ marginBottom: 12 }}>
               <div
@@ -349,7 +365,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   fontSize: 10.5,
                   fontWeight: 700,
                   letterSpacing: "0.06em",
-                  color: "#9ca3af",
+                  color: "var(--os-ink-muted)",
                   textTransform: "uppercase",
                   padding: "6px 8px 4px"
                 }}
@@ -362,6 +378,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 return (
                   <button
                     key={m.id}
+                    aria-pressed={isSelected}
                     onClick={() => onSelectMeeting(m.id)}
                     style={{
                       width: "100%",
@@ -370,7 +387,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                       gap: 4,
                       padding: "10px 12px",
                       borderRadius: 8,
-                      background: isSelected ? "#e0e7ff" : "transparent",
+                      background: isSelected ? "var(--os-surface-hover)" : "transparent",
                       border: "none",
                       textAlign: "left",
                       cursor: "pointer",
@@ -384,7 +401,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                             width: 7,
                             height: 7,
                             borderRadius: "50%",
-                            background: m.status === "paused" ? "#9ca3af" : "#ef4444"
+                            background: m.status === "paused" ? "var(--os-warning)" : "var(--os-recording)"
                           }}
                         />
                       )}
@@ -392,10 +409,11 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                         style={{
                           fontSize: 13,
                           fontWeight: 600,
-                          color: "#181a1f",
+                          color: "var(--os-ink)",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
+                      minWidth: 0,
                           flex: 1
                         }}
                       >
@@ -403,13 +421,13 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                       </span>
                     </div>
 
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#6b7280" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--os-ink-muted)" }}>
                       <span>{formatDuration(m.duration)}</span>
                       <span>·</span>
                       <span
                         style={{
                           textTransform: "capitalize",
-                          color: m.status === "ready" ? "#16a34a" : m.status === "failed" ? "#dc2626" : "#4b5563"
+                          color: m.status === "ready" ? "color-mix(in srgb, var(--os-success) 60%, var(--os-ink))" : m.status === "failed" ? "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))" : "var(--os-ink-muted)"
                         }}
                       >
                         {m.status}
@@ -424,23 +442,25 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
       </div>
 
       {/* Right Detail Pane */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div className="detail-pane" style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
         {selectedRecord ? (
           <>
             {/* Detail Toolbar */}
             <div
+              className="ui-toolbar"
               style={{
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
                 padding: "14px 28px",
-                borderBottom: "1px solid rgba(0,0,0,0.08)",
-                background: "#fbf9f4"
+                borderBottom: "1px solid var(--os-line)",
+                background: "var(--os-background)"
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <input
                   type="text"
+                  aria-label="Meeting title"
                   value={selectedRecord.title}
                   onChange={(e) => {
                     const updated = { ...selectedRecord, title: e.target.value };
@@ -452,7 +472,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                     border: "none",
                     outline: "none",
                     background: "transparent",
-                    color: "#181a1f",
+                    color: "var(--os-ink)",
                     maxWidth: 360
                   }}
                 />
@@ -463,8 +483,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   onClick={handleExportMarkdown}
                   title="Copy as Markdown"
                   style={{
-                    background: "#ffffff",
-                    border: "1px solid rgba(0,0,0,0.1)",
+                    background: "var(--os-surface)",
+                    border: "1px solid var(--os-line)",
                     borderRadius: 6,
                     padding: "5px 10px",
                     cursor: "pointer",
@@ -472,21 +492,22 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                     alignItems: "center",
                     gap: 5,
                     fontSize: 12,
-                    color: "#374151"
+                    color: "var(--os-ink)"
                   }}
                 >
                   <Copy size={13} /> Copy Markdown
                 </button>
                 <button
+                  disabled={isActive || isProcessing}
                   onClick={() => handleDelete(selectedRecord.id)}
                   title="Delete meeting"
                   style={{
                     background: "transparent",
-                    border: "1px solid rgba(239, 68, 68, 0.2)",
+                    border: "1px solid var(--os-line)",
                     borderRadius: 6,
                     padding: "5px 8px",
                     cursor: "pointer",
-                    color: "#ef4444"
+                    color: "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))"
                   }}
                 >
                   <Trash2 size={13} />
@@ -495,15 +516,15 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
             </div>
 
             {/* State Strip / Banners */}
-            <div style={{ padding: "12px 28px 0" }}>
+            <div className="meeting-banners" style={{ padding: "12px 28px 0" }}>
               {isActive && (
                 <div
                   style={{
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
-                    background: "rgba(239, 68, 68, 0.08)",
-                    border: "1px solid rgba(239, 68, 68, 0.2)",
+                    background: "var(--os-recording-soft)",
+                    border: "1px solid var(--os-line)",
                     borderRadius: 10,
                     padding: "10px 14px",
                     marginBottom: 12
@@ -515,14 +536,14 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                         width: 9,
                         height: 9,
                         borderRadius: "50%",
-                        background: selectedRecord.status === "paused" ? "#9ca3af" : "#ef4444"
+                        background: selectedRecord.status === "paused" ? "var(--os-warning)" : "var(--os-recording)"
                       }}
                     />
                     <div>
-                      <strong style={{ fontSize: 13, color: "#181a1f" }}>
+                      <strong style={{ fontSize: 13, color: "var(--os-ink)" }}>
                         {selectedRecord.status === "paused" ? "Meeting Paused" : "Meeting Recording Active"}
                       </strong>
-                      <span style={{ fontSize: 11.5, color: "#6b7280", display: "block" }}>
+                      <span style={{ fontSize: 11.5, color: "var(--os-ink-muted)", display: "block" }}>
                         {formatDuration(selectedRecord.duration)} · {selectedRecord.liveTranscription ? "Live transcription active" : "Transcription on stop"}
                       </span>
                     </div>
@@ -532,8 +553,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                     <button
                       onClick={handlePauseResume}
                       style={{
-                        background: "#ffffff",
-                        border: "1px solid rgba(0,0,0,0.15)",
+                        background: "var(--os-surface)",
+                        border: "1px solid var(--os-line)",
                         borderRadius: 6,
                         padding: "5px 12px",
                         fontSize: 12,
@@ -549,8 +570,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                     <button
                       onClick={handleFinish}
                       style={{
-                        background: "#ef4444",
-                        color: "#ffffff",
+                        background: "color-mix(in srgb, var(--os-recording) 78%, var(--os-ink))",
+                        color: "var(--os-primary-text)",
                         border: "none",
                         borderRadius: 6,
                         padding: "5px 14px",
@@ -562,7 +583,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                         gap: 4
                       }}
                     >
-                      <Square size={10} fill="#ffffff" /> Stop & save
+                      <Square size={10} fill="var(--os-primary-text)" /> Stop & save
                     </button>
                   </div>
                 </div>
@@ -572,8 +593,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
               {selectedRecord.summaryNeedsConfirmation && (
                 <div
                   style={{
-                    background: "#fef3c7",
-                    border: "1px solid #fde68a",
+                    background: "var(--os-warning-soft)",
+                    border: "1px solid var(--os-line)",
                     borderRadius: 10,
                     padding: "12px 16px",
                     display: "flex",
@@ -583,10 +604,10 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   }}
                 >
                   <div>
-                    <strong style={{ fontSize: 13, color: "#92400e" }}>
+                    <strong style={{ fontSize: 13, color: "var(--os-ink)" }}>
                       Very short meeting
                     </strong>
-                    <span style={{ fontSize: 12, color: "#b45309", display: "block" }}>
+                    <span style={{ fontSize: 12, color: "var(--os-ink)", display: "block" }}>
                       Only a few words were transcribed. Was this meeting started by mistake?
                     </span>
                   </div>
@@ -594,16 +615,12 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       onClick={async () => {
-                        await summarizeShortMeeting(selectedRecord.id).catch(reportUiError);
-                        onUpdateMeetings(
-                          meetings.map((m) =>
-                            m.id === selectedRecord.id ? { ...m, summaryNeedsConfirmation: false } : m
-                          )
-                        );
+                        try { await summarizeShortMeeting(selectedRecord.id); onUpdateMeetings([]); }
+                        catch (error) { reportUiError(error); }
                       }}
                       style={{
-                        background: "#d97706",
-                        color: "#ffffff",
+                        background: "var(--os-accent)",
+                        color: "var(--os-primary-text)",
                         border: "none",
                         borderRadius: 6,
                         padding: "5px 12px",
@@ -616,17 +633,13 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                     </button>
                     <button
                       onClick={async () => {
-                        await skipSummary(selectedRecord.id).catch(reportUiError);
-                        onUpdateMeetings(
-                          meetings.map((m) =>
-                            m.id === selectedRecord.id ? { ...m, summaryNeedsConfirmation: false } : m
-                          )
-                        );
+                        try { await skipSummary(selectedRecord.id); onUpdateMeetings([]); }
+                        catch (error) { reportUiError(error); }
                       }}
                       style={{
-                        background: "#ffffff",
-                        border: "1px solid #d97706",
-                        color: "#d97706",
+                        background: "var(--os-surface)",
+                        border: "1px solid var(--os-warning)",
+                        color: "var(--os-ink)",
                         borderRadius: 6,
                         padding: "5px 12px",
                         fontSize: 12,
@@ -641,7 +654,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                       style={{
                         background: "transparent",
                         border: "none",
-                        color: "#dc2626",
+                        color: "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))",
                         fontSize: 12,
                         cursor: "pointer"
                       }}
@@ -656,8 +669,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
               {selectedRecord.lastError && (
                 <div
                   style={{
-                    background: "#fee2e2",
-                    border: "1px solid #fecaca",
+                    background: "var(--os-recording-soft)",
+                    border: "1px solid var(--os-line)",
                     borderRadius: 10,
                     padding: "10px 14px",
                     marginBottom: 12,
@@ -667,8 +680,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   }}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <AlertCircle size={16} color="#dc2626" />
-                    <span style={{ fontSize: 12.5, color: "#991b1b" }}>
+                    <AlertCircle size={16} color="var(--os-recording)" />
+                    <span style={{ fontSize: 12.5, color: "var(--os-ink)" }}>
                       {selectedRecord.lastError}
                     </span>
                   </div>
@@ -676,8 +689,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                     <button
                       onClick={() => run(processMeeting(selectedRecord.id))}
                       style={{
-                        background: "#dc2626",
-                        color: "#ffffff",
+                        background: "color-mix(in srgb, var(--os-recording) 78%, var(--os-ink))",
+                        color: "var(--os-primary-text)",
                         border: "none",
                         borderRadius: 6,
                         padding: "4px 10px",
@@ -691,20 +704,27 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   </div>
                 </div>
               )}
+
+              {selectedRecord.recoveryNotice && <p role="status" style={{ margin: 12, padding: 12, color: "var(--os-ink)", background: "var(--os-warning-soft)" }}>{selectedRecord.recoveryNotice}</p>}
+              {recoverableMeetings.length > 0 && <div className="workspace-banner" role="status" style={{ padding: 12, background: "var(--os-warning-soft)" }}>
+                {recoverableMeetings.length} meetings need attention. <button className="quiet" onClick={() => setConfirmDiscardAll(true)}>Discard all</button>
+              </div>}
+              {confirmDiscardAll && <ConfirmDialog title="Discard failed meetings?" confirmLabel="Discard all" onCancel={() => setConfirmDiscardAll(false)} onConfirm={() => {
+                setConfirmDiscardAll(false);
+                run((async () => { try { for (const record of recoverableMeetings) await deleteMeeting(record.id); } finally { onUpdateMeetings([]); } })());
+              }}>Failed and interrupted meetings and their recordings will be permanently deleted.</ConfirmDialog>}
+              {isActive && selectedRecord.lastError && <button className="quiet" onClick={() => run(retryLiveTranscription())}>Retry live transcription</button>}
+              {(selectedRecord.status === "transcribing" || selectedRecord.status === "summarizing") && <button className="quiet" onClick={() => run(cancelProcessing())}>Cancel processing</button>}
             </div>
 
-            {recoverableMeetings.length > 0 && <div role="status" style={{ padding: 12, background: "#fef3c7" }}>{recoverableMeetings.length} meetings need attention. <button onClick={() => {
-              if (confirm("Permanently delete all failed and interrupted meetings and their recordings?")) run((async () => { try { for (const record of recoverableMeetings) await deleteMeeting(record.id); } finally { onUpdateMeetings([]); } })());
-            }}>Discard all</button></div>}
-            {isActive && selectedRecord.lastError && <button onClick={() => run(retryLiveTranscription())}>Retry live transcription</button>}
-            {(selectedRecord.status === "transcribing" || selectedRecord.status === "summarizing") && <button onClick={() => run(cancelProcessing())}>Cancel processing</button>}
             {/* Tabs */}
             <div
+              className="meeting-tabs"
               style={{
                 display: "flex",
                 gap: 20,
                 padding: "8px 28px",
-                borderBottom: "1px solid rgba(0,0,0,0.06)",
+                borderBottom: "1px solid var(--os-line)",
                 fontSize: 13,
                 fontWeight: 500
               }}
@@ -714,8 +734,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 style={{
                   background: "transparent",
                   border: "none",
-                  borderBottom: tab === "summary" ? "2px solid #2563eb" : "2px solid transparent",
-                  color: tab === "summary" ? "#2563eb" : "#6b7280",
+                  borderBottom: tab === "summary" ? "2px solid var(--os-accent)" : "2px solid transparent",
+                  color: tab === "summary" ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink-muted)",
                   padding: "6px 2px",
                   cursor: "pointer",
                   fontWeight: tab === "summary" ? 600 : 500
@@ -728,8 +748,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 style={{
                   background: "transparent",
                   border: "none",
-                  borderBottom: tab === "transcript" ? "2px solid #2563eb" : "2px solid transparent",
-                  color: tab === "transcript" ? "#2563eb" : "#6b7280",
+                  borderBottom: tab === "transcript" ? "2px solid var(--os-accent)" : "2px solid transparent",
+                  color: tab === "transcript" ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink-muted)",
                   padding: "6px 2px",
                   cursor: "pointer",
                   fontWeight: tab === "transcript" ? 600 : 500
@@ -742,8 +762,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 style={{
                   background: "transparent",
                   border: "none",
-                  borderBottom: tab === "notes" ? "2px solid #2563eb" : "2px solid transparent",
-                  color: tab === "notes" ? "#2563eb" : "#6b7280",
+                  borderBottom: tab === "notes" ? "2px solid var(--os-accent)" : "2px solid transparent",
+                  color: tab === "notes" ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink-muted)",
                   padding: "6px 2px",
                   cursor: "pointer",
                   fontWeight: tab === "notes" ? 600 : 500
@@ -751,24 +771,24 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
               >
                 My notes
               </button>
-              <button onClick={() => setTab("recording")} style={{ background: "transparent", border: "none", color: tab === "recording" ? "#2563eb" : "#6b7280", cursor: "pointer" }}>Recording</button>
+              <button onClick={() => setTab("recording")} style={{ background: "transparent", border: "none", borderBottom: tab === "recording" ? "2px solid var(--os-accent)" : "2px solid transparent", padding: "6px 2px", color: tab === "recording" ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink-muted)", cursor: "pointer" }}>Recording</button>
             </div>
 
             {/* Tab Contents */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "20px 28px" }}>
+            <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", padding: "20px 28px" }}>
               {tab === "summary" && (
                 <div>
                   {selectedRecord.summary ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
                       {/* Overview / Key points */}
                       <div>
-                        <h3 style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "#6b7280", textTransform: "uppercase", margin: "0 0 10px" }}>
+                        <h3 style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "var(--os-ink-muted)", textTransform: "uppercase", margin: "0 0 10px" }}>
                           Key Points
                         </h3>
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           {selectedRecord.summary.overview.map((pt, i) => (
                             <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#2563eb", marginTop: 7, flexShrink: 0 }} />
+                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--os-accent)", marginTop: 7, flexShrink: 0 }} />
                               <div style={{ flex: 1 }}>
                                 <p style={{ margin: "0 0 4px", fontSize: 14, lineHeight: 1.5 }}>
                                   {pt.text}
@@ -779,8 +799,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                                       key={cite.sourceId}
                                       onClick={() => jumpToCitation(cite.sourceId)}
                                       style={{
-                                        background: "rgba(37, 99, 235, 0.08)",
-                                        color: "#2563eb",
+                                        background: "var(--os-accent-soft)",
+                                        color: "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))",
                                         border: "none",
                                         borderRadius: 4,
                                         padding: "1px 6px",
@@ -801,16 +821,16 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
 
                       {/* Decisions */}
                       <div>
-                        <h3 style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "#6b7280", textTransform: "uppercase", margin: "0 0 10px" }}>
+                        <h3 style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "var(--os-ink-muted)", textTransform: "uppercase", margin: "0 0 10px" }}>
                           Decisions
                         </h3>
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           {selectedRecord.summary.decisions.length === 0 ? (
-                            <span style={{ fontSize: 13, color: "#9ca3af", fontStyle: "italic" }}>None identified.</span>
+                            <span style={{ fontSize: 13, color: "var(--os-ink-muted)", fontStyle: "italic" }}>None identified.</span>
                           ) : (
                             selectedRecord.summary.decisions.map((pt, i) => (
                               <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#16a34a", marginTop: 7, flexShrink: 0 }} />
+                                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--os-success)", marginTop: 7, flexShrink: 0 }} />
                                 <div style={{ flex: 1 }}>
                                   <p style={{ margin: "0 0 4px", fontSize: 14, lineHeight: 1.5 }}>
                                     {pt.text}
@@ -821,8 +841,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                                         key={cite.sourceId}
                                         onClick={() => jumpToCitation(cite.sourceId)}
                                         style={{
-                                          background: "rgba(22, 163, 74, 0.08)",
-                                          color: "#16a34a",
+                                          background: "var(--os-success-soft)",
+                                          color: "color-mix(in srgb, var(--os-success) 60%, var(--os-ink))",
                                           border: "none",
                                           borderRadius: 4,
                                           padding: "1px 6px",
@@ -844,12 +864,12 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
 
                       {/* Action items */}
                       <div>
-                        <h3 style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "#6b7280", textTransform: "uppercase", margin: "0 0 10px" }}>
+                        <h3 style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "var(--os-ink-muted)", textTransform: "uppercase", margin: "0 0 10px" }}>
                           Action Items
                         </h3>
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           {selectedRecord.summary.actions.length === 0 ? (
-                            <span style={{ fontSize: 13, color: "#9ca3af", fontStyle: "italic" }}>None identified.</span>
+                            <span style={{ fontSize: 13, color: "var(--os-ink-muted)", fontStyle: "italic" }}>None identified.</span>
                           ) : (
                             selectedRecord.summary.actions.map((pt, i) => (
                               <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -864,8 +884,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                                         key={cite.sourceId}
                                         onClick={() => jumpToCitation(cite.sourceId)}
                                         style={{
-                                          background: "rgba(37, 99, 235, 0.08)",
-                                          color: "#2563eb",
+                                          background: "var(--os-accent-soft)",
+                                          color: "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))",
                                           border: "none",
                                           borderRadius: 4,
                                           padding: "1px 6px",
@@ -886,8 +906,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                       </div>
                     </div>
                   ) : (
-                    <div style={{ textAlign: "center", padding: "40px 20px", color: "#6b7280" }}>
-                      <Sparkles size={32} color="#2563eb" style={{ marginBottom: 12 }} />
+                    <div style={{ textAlign: "center", padding: "40px 20px", color: "var(--os-ink-muted)" }}>
+                      <Sparkles size={32} color="var(--os-accent)" style={{ marginBottom: 12 }} />
                       <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>No summary yet</h3>
                       <p style={{ fontSize: 13, maxWidth: 360, margin: "0 auto 16px" }}>
                         {selectedRecord.segments.length === 0
@@ -895,10 +915,11 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                           : "Transcribe and summarize to extract key points and action items."}
                       </p>
                       <button
+                        disabled={isActive || isProcessing}
                         onClick={() => run(processMeeting(selectedRecord.id))}
                         style={{
-                          background: "#2563eb",
-                          color: "#ffffff",
+                          background: "var(--os-accent)",
+                          color: "var(--os-primary-text)",
                           border: "none",
                           borderRadius: 6,
                           padding: "6px 16px",
@@ -907,7 +928,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                           cursor: "pointer"
                         }}
                       >
-                        Create summary
+                        {isProcessing ? "Processing…" : isActive ? "Recording in progress" : "Create summary"}
                       </button>
                     </div>
                   )}
@@ -917,17 +938,17 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
               {tab === "transcript" && (
                 <div>
                   {/* Search and Track Filter Bar */}
-                  <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
                     <input
                       type="text"
                       value={transcriptSearch}
                       onChange={(e) => setTranscriptSearch(e.target.value)}
                       placeholder="Search this transcript"
                       style={{
-                        flex: 1,
+                        flex: 1, minWidth: 0, minHeight: 0,
                         padding: "6px 12px",
                         borderRadius: 6,
-                        border: "1px solid rgba(0,0,0,0.12)",
+                        border: "1px solid var(--os-line)",
                         fontSize: 13
                       }}
                     />
@@ -937,9 +958,9 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                       style={{
                         padding: "6px 10px",
                         borderRadius: 6,
-                        border: "1px solid rgba(0,0,0,0.12)",
+                        border: "1px solid var(--os-line)",
                         fontSize: 12.5,
-                        background: "#ffffff"
+                        background: "var(--os-surface)"
                       }}
                     >
                       <option value="all">All audio</option>
@@ -951,7 +972,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   {/* Passages List */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                     {passages.length === 0 ? (
-                      <p style={{ color: "#9ca3af", fontSize: 13.5, fontStyle: "italic" }}>
+                      <p style={{ color: "var(--os-ink-muted)", fontSize: 13.5, fontStyle: "italic" }}>
                         No transcript passages available.
                       </p>
                     ) : (
@@ -961,11 +982,12 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                         return (
                           <div
                             key={p.id}
+                            ref={isHighlighted ? citationTarget : undefined}
                             style={{
                               display: "flex",
                               flexDirection: "column",
                               gap: 4,
-                              background: isHighlighted ? "rgba(254, 240, 138, 0.3)" : "transparent",
+                              background: isHighlighted ? "var(--os-warning-soft)" : "transparent",
                               padding: isHighlighted ? "6px 8px" : "0",
                               borderRadius: 6,
                               transition: "background 0.3s ease"
@@ -976,14 +998,14 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                                 style={{
                                   fontSize: 11,
                                   fontWeight: 600,
-                                  color: isMic ? "#2563eb" : "#16a34a"
+                                  color: isMic ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "color-mix(in srgb, var(--os-success) 60%, var(--os-ink))"
                                 }}
                               >
                                 {isMic
                                   ? selectedRecord.microphoneLabel ?? "Microphone"
                                   : selectedRecord.systemLabel ?? "System audio"}
                               </span>
-                              <span style={{ fontSize: 11, fontFamily: "monospace", color: "#9ca3af" }}>
+                              <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--os-ink-muted)" }}>
                                 {formatTimestamp(p.start)}
                               </span>
                             </div>
@@ -1024,7 +1046,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
             </div>
           </>
         ) : (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#9ca3af" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--os-ink-muted)" }}>
             Select a meeting or start a new recording
           </div>
         )}

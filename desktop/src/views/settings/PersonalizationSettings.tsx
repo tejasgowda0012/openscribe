@@ -76,7 +76,7 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* Sub Tabs */}
-      <div style={{ display: "flex", gap: 12, borderBottom: "1px solid rgba(0,0,0,0.08)", paddingBottom: 8 }}>
+      <div style={{ display: "flex", gap: 12, borderBottom: "1px solid var(--os-line)", paddingBottom: 8 }}>
         {(["dictionary", "snippets", "smart"] as const).map((t) => (
           <button
             key={t}
@@ -84,8 +84,8 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
             style={{
               background: "transparent",
               border: "none",
-              borderBottom: activeTab === t ? "2px solid #2563eb" : "2px solid transparent",
-              color: activeTab === t ? "#2563eb" : "#6b7280",
+              borderBottom: activeTab === t ? "2px solid var(--os-accent)" : "2px solid transparent",
+              color: activeTab === t ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink-muted)",
               fontSize: 13,
               fontWeight: activeTab === t ? 600 : 500,
               padding: "4px 2px",
@@ -102,8 +102,8 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div
             style={{
-              background: "#ffffff",
-              border: "1px solid rgba(0,0,0,0.1)",
+              background: "var(--os-surface)",
+              border: "1px solid var(--os-line)",
               borderRadius: 10,
               padding: "16px 20px",
               display: "flex",
@@ -111,12 +111,12 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
               gap: 16
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
                 <strong style={{ fontSize: 13.5, display: "block" }}>
                   Send words to the speech model
                 </strong>
-                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
                   Passes custom vocabulary and speech hints directly into supported models.
                 </span>
               </div>
@@ -127,14 +127,14 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
               />
             </div>
 
-            <div style={{ height: 1, background: "rgba(0,0,0,0.06)" }} />
+            <div style={{ height: 1, background: "var(--os-line)" }} />
 
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
                 <strong style={{ fontSize: 13.5, display: "block" }}>
                   Understand spoken corrections
                 </strong>
-                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
                   Detect phrases like “no wait” or spelled-out names, correcting them cleanly.
                 </span>
               </div>
@@ -145,14 +145,14 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
               />
             </div>
 
-            <div style={{ height: 1, background: "rgba(0,0,0,0.06)" }} />
+            <div style={{ height: 1, background: "var(--os-line)" }} />
 
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
                 <strong style={{ fontSize: 13.5, display: "block" }}>
                   Learn words you spell out
                 </strong>
-                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
                   Automatically adds spelled-out terminology to your custom vocabulary.
                 </span>
               </div>
@@ -164,14 +164,14 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
               />
             </div>
 
-            <div style={{ height: 1, background: "rgba(0,0,0,0.06)" }} />
+            <div style={{ height: 1, background: "var(--os-line)" }} />
 
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
                 <strong style={{ fontSize: 13.5, display: "block" }}>
                   Correction model
                 </strong>
-                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
                   Fast LLM used to resolve spoken corrections and spelling.
                 </span>
               </div>
@@ -184,7 +184,7 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
                 style={{
                   padding: "6px 10px",
                   borderRadius: 6,
-                  border: "1px solid rgba(0,0,0,0.15)",
+                  border: "1px solid var(--os-line)",
                   fontSize: 12.5,
                   width: 180
                 }}
@@ -199,8 +199,8 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
           {/* Custom Vocabulary */}
           <div
             style={{
-              background: "#ffffff",
-              border: "1px solid rgba(0,0,0,0.1)",
+              background: "var(--os-surface)",
+              border: "1px solid var(--os-line)",
               borderRadius: 10,
               padding: "16px 20px"
             }}
@@ -208,7 +208,7 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
             <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: "0 0 6px" }}>
               Custom Vocabulary
             </h4>
-            <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 10px" }}>
+            <p style={{ fontSize: 12, color: "var(--os-ink-muted)", margin: "0 0 10px" }}>
               Add names, technical jargon, or acronyms (separated by commas or new lines).
             </p>
             <textarea
@@ -220,7 +220,7 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
                 minHeight: 80,
                 padding: "8px 10px",
                 borderRadius: 6,
-                border: "1px solid rgba(0,0,0,0.12)",
+                border: "1px solid var(--os-line)",
                 fontSize: 13,
                 fontFamily: "inherit"
               }}
@@ -230,8 +230,8 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
           {/* Corrections Rules */}
           <div
             style={{
-              background: "#ffffff",
-              border: "1px solid rgba(0,0,0,0.1)",
+              background: "var(--os-surface)",
+              border: "1px solid var(--os-line)",
               borderRadius: 10,
               padding: "16px 20px"
             }}
@@ -239,30 +239,30 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
             <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: "0 0 6px" }}>
               Correction Rules
             </h4>
-            <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 12px" }}>
+            <p style={{ fontSize: 12, color: "var(--os-ink-muted)", margin: "0 0 12px" }}>
               Always replace frequently misheard phrases with the correct term.
             </p>
 
-            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <div className="form-add-row" style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               <input
                 type="text"
                 placeholder="What was heard"
                 value={heard}
                 onChange={(e) => setHeard(e.target.value)}
-                style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.12)", fontSize: 13 }}
+                style={{ flex: 1, minWidth: 0, minHeight: 0, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--os-line)", fontSize: 13 }}
               />
               <input
                 type="text"
                 placeholder="Replacement"
                 value={replacement}
                 onChange={(e) => setReplacement(e.target.value)}
-                style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.12)", fontSize: 13 }}
+                style={{ flex: 1, minWidth: 0, minHeight: 0, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--os-line)", fontSize: 13 }}
               />
               <button
                 onClick={handleAddCorrection}
                 style={{
-                  background: "#2563eb",
-                  color: "#ffffff",
+                  background: "var(--os-accent)",
+                  color: "var(--os-primary-text)",
                   border: "none",
                   borderRadius: 6,
                   padding: "0 14px",
@@ -281,22 +281,23 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
                   key={rule.id}
                   style={{
                     display: "flex",
+                    flexWrap: "wrap", gap: 12,
                     alignItems: "center",
                     justifyContent: "space-between",
                     padding: "6px 10px",
-                    background: "#f9fafb",
+                    background: "var(--os-surface-muted)",
                     borderRadius: 6,
                     fontSize: 12.5
                   }}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ color: "#4b5563" }}>{rule.heard}</span>
-                    <ChevronRight size={13} color="#9ca3af" />
-                    <strong style={{ color: "#181a1f" }}>{rule.replacement}</strong>
+                    <span style={{ color: "var(--os-ink-muted)" }}>{rule.heard}</span>
+                    <ChevronRight size={13} color="var(--os-ink-muted)" />
+                    <strong style={{ color: "var(--os-ink)" }}>{rule.replacement}</strong>
                   </div>
                   <button
                     onClick={() => handleRemoveCorrection(rule.id)}
-                    style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}
+                    style={{ background: "transparent", border: "none", color: "var(--os-ink-muted)", cursor: "pointer" }}
                   >
                     <X size={13} />
                   </button>
@@ -310,8 +311,8 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
       {activeTab === "snippets" && (
         <div
           style={{
-            background: "#ffffff",
-            border: "1px solid rgba(0,0,0,0.1)",
+            background: "var(--os-surface)",
+            border: "1px solid var(--os-line)",
             borderRadius: 10,
             padding: "16px 20px"
           }}
@@ -319,30 +320,30 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
           <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: "0 0 6px" }}>
             Voice Snippets
           </h4>
-          <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 12px" }}>
+          <p style={{ fontSize: 12, color: "var(--os-ink-muted)", margin: "0 0 12px" }}>
             When a dictation matches the exact trigger phrase, it expands into the full text.
           </p>
 
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <div className="form-add-row" style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <input
               type="text"
               placeholder="Spoken trigger"
               value={trigger}
               onChange={(e) => setTrigger(e.target.value)}
-              style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.12)", fontSize: 13 }}
+              style={{ flex: 1, minWidth: 0, minHeight: 0, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--os-line)", fontSize: 13 }}
             />
             <input
               type="text"
               placeholder="Exact expansion"
               value={expansion}
               onChange={(e) => setExpansion(e.target.value)}
-              style={{ flex: 1.5, padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.12)", fontSize: 13 }}
+              style={{ flex: 1.5, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--os-line)", fontSize: 13 }}
             />
             <button
               onClick={handleAddSnippet}
               style={{
-                background: "#2563eb",
-                color: "#ffffff",
+                background: "var(--os-accent)",
+                color: "var(--os-primary-text)",
                 border: "none",
                 borderRadius: 6,
                 padding: "0 14px",
@@ -364,19 +365,19 @@ export const PersonalizationSettings: React.FC<PersonalizationSettingsProps> = (
                   alignItems: "center",
                   justifyContent: "space-between",
                   padding: "6px 10px",
-                  background: "#f9fafb",
+                  background: "var(--os-surface-muted)",
                   borderRadius: 6,
                   fontSize: 12.5
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: "#4b5563" }}>"{snip.trigger}"</span>
-                  <ChevronRight size={13} color="#9ca3af" />
-                  <strong style={{ color: "#181a1f" }}>{snip.replacement}</strong>
+                  <span style={{ color: "var(--os-ink-muted)" }}>"{snip.trigger}"</span>
+                  <ChevronRight size={13} color="var(--os-ink-muted)" />
+                  <strong style={{ color: "var(--os-ink)" }}>{snip.replacement}</strong>
                 </div>
                 <button
                   onClick={() => handleRemoveSnippet(snip.id)}
-                  style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}
+                  style={{ background: "transparent", border: "none", color: "var(--os-ink-muted)", cursor: "pointer" }}
                 >
                   <X size={13} />
                 </button>

@@ -4,7 +4,7 @@ import { providerDefaults, providers } from "../../defaults";
 import { native, speechAccount, writingAccount } from "../../native";
 import type { AudioInput } from "../../types";
 
-const box: React.CSSProperties = { background: "#fff", border: "1px solid #0002", borderRadius: 10, padding: 20, display: "flex", flexDirection: "column", gap: 12 };
+const box: React.CSSProperties = { background: "var(--os-surface)", border: "1px solid var(--os-line)", borderRadius: 10, padding: 20, display: "flex", flexDirection: "column", gap: 12 };
 const field: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 5, fontSize: 13 };
 
 function ProviderForm({ purpose, settings, onUpdateSettings }: { purpose: "speech" | "writing"; settings: ParitySettings; onUpdateSettings: (settings: ParitySettings) => void }) {
@@ -35,7 +35,7 @@ function ProviderForm({ purpose, settings, onUpdateSettings }: { purpose: "speec
     } catch (error) { setMessage(String(error)); }
     finally { setBusy(false); }
   };
-  return <form style={box} onSubmit={event => { event.preventDefault(); onUpdateSettings(current); }}>
+  return <form className="provider-form" style={box} onSubmit={event => { event.preventDefault(); onUpdateSettings(current); }}>
     <h4 style={{ margin: 0 }}>{purpose === "speech" ? "Speech transcription" : "Writing and cleanup"}</h4>
     <label style={field}>Provider<select value={provider} onChange={event => changeProvider(event.target.value)}>
       {providers.filter(choice => purpose === "speech" ? choice.speechModel : choice.writingModel).map(choice => <option key={choice.id} value={choice.id}>{choice.title}</option>)}

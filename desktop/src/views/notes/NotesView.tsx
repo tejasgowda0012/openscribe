@@ -162,12 +162,13 @@ export const NotesView: React.FC<NotesViewProps> = ({
     <div style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
       {/* Sidebar Library */}
       <div
+        className="library-pane"
         style={{
-          width: 280,
-          borderRight: "1px solid rgba(0,0,0,0.08)",
+          width: 280, flexShrink: 0,
+          borderRight: "1px solid var(--os-line)",
           display: "flex",
           flexDirection: "column",
-          background: "#faf8f4"
+          background: "var(--os-background)"
         }}
       >
         <div
@@ -185,8 +186,8 @@ export const NotesView: React.FC<NotesViewProps> = ({
             onClick={handleCreateWrittenNote}
             title="New note"
             style={{
-              background: "#ffffff",
-              border: "1px solid rgba(0,0,0,0.12)",
+              background: "var(--os-surface)",
+              border: "1px solid var(--os-line)",
               borderRadius: 6,
               padding: "4px 8px",
               cursor: "pointer",
@@ -208,13 +209,13 @@ export const NotesView: React.FC<NotesViewProps> = ({
               display: "flex",
               alignItems: "center",
               gap: 8,
-              background: "#ffffff",
-              border: "1px solid rgba(0,0,0,0.1)",
+              background: "var(--os-surface)",
+              border: "1px solid var(--os-line)",
               borderRadius: 8,
               padding: "6px 10px"
             }}
           >
-            <Search size={14} color="#9ca3af" />
+            <Search size={14} color="var(--os-ink-muted)" />
             <input
               type="text"
               value={search}
@@ -237,7 +238,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
             display: "flex",
             gap: 6,
             padding: "0 16px 12px",
-            borderBottom: "1px solid rgba(0,0,0,0.06)"
+            borderBottom: "1px solid var(--os-line)"
           }}
         >
           {(["all", "daily", "written"] as const).map((t) => (
@@ -245,8 +246,8 @@ export const NotesView: React.FC<NotesViewProps> = ({
               key={t}
               onClick={() => setFilter(t)}
               style={{
-                background: filter === t ? "#2563eb" : "transparent",
-                color: filter === t ? "#ffffff" : "#6b7280",
+                background: filter === t ? "var(--os-accent)" : "transparent",
+                color: filter === t ? "var(--os-surface)" : "var(--os-ink-muted)",
                 border: "none",
                 borderRadius: 999,
                 padding: "3px 10px",
@@ -262,10 +263,11 @@ export const NotesView: React.FC<NotesViewProps> = ({
         </div>
 
         {/* Notes List */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "8px" }}>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", padding: "8px" }}>
           {/* Always show Today at top when appropriate */}
           {filter !== "written" && !search && (
             <button
+              aria-pressed={isSelectedToday}
               onClick={() => onSelectNote(todayNote.id)}
               style={{
                 width: "100%",
@@ -274,7 +276,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
                 gap: 3,
                 padding: "10px 12px",
                 borderRadius: 8,
-                background: isSelectedToday ? "#e0e7ff" : "transparent",
+                background: isSelectedToday ? "var(--os-surface-hover)" : "transparent",
                 border: "none",
                 textAlign: "left",
                 cursor: "pointer",
@@ -282,15 +284,15 @@ export const NotesView: React.FC<NotesViewProps> = ({
               }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: "#181a1f" }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--os-ink)" }}>
                   Today
                 </span>
                 <span
                   style={{
                     fontSize: 10,
                     fontWeight: 700,
-                    background: "#2563eb",
-                    color: "#ffffff",
+                    background: "var(--os-accent)",
+                    color: "var(--os-primary-text)",
                     borderRadius: 4,
                     padding: "1px 5px"
                   }}
@@ -298,12 +300,15 @@ export const NotesView: React.FC<NotesViewProps> = ({
                   TODAY
                 </span>
               </div>
-              <span style={{ fontSize: 11.5, color: "#6b7280" }}>
+              <span style={{ fontSize: 11.5, color: "var(--os-ink-muted)" }}>
                 {todayNote.captures?.length ?? 0} entries
               </span>
             </button>
           )}
 
+          {filteredNotes.length === 0 && (search.trim() || filter === "written") && (
+            <p className="list-empty" role="status">{search.trim() ? "No matching notes" : "No written notes yet"}</p>
+          )}
           {filteredNotes.map((n) => {
             if (n.id === todayNote.id && filter !== "written" && !search) return null;
             const isSelected = selectedNote.id === n.id;
@@ -316,6 +321,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
             return (
               <button
                 key={n.id}
+                aria-pressed={isSelected}
                 onClick={() => onSelectNote(n.id)}
                 style={{
                   width: "100%",
@@ -324,7 +330,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
                   gap: 3,
                   padding: "10px 12px",
                   borderRadius: 8,
-                  background: isSelected ? "#e0e7ff" : "transparent",
+                  background: isSelected ? "var(--os-surface-hover)" : "transparent",
                   border: "none",
                   textAlign: "left",
                   cursor: "pointer",
@@ -336,17 +342,18 @@ export const NotesView: React.FC<NotesViewProps> = ({
                     style={{
                       fontSize: 13,
                       fontWeight: 600,
-                      color: "#181a1f",
+                      color: "var(--os-ink)",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
-                      whiteSpace: "nowrap"
+                      whiteSpace: "nowrap",
+                      minWidth: 0
                     }}
                   >
                     {n.title || (isDaily ? dateStr : "Untitled Note")}
                   </span>
-                  {n.isPinned && <Pin size={11} color="#2563eb" fill="#2563eb" />}
+                  {n.isPinned && <Pin size={11} color="var(--os-accent)" fill="var(--os-accent)" />}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "#6b7280" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--os-ink-muted)" }}>
                   <span>{dateStr}</span>
                   <span>·</span>
                   <span>{isDaily ? `${n.captures?.length ?? 0} entries` : "Written"}</span>
@@ -358,9 +365,10 @@ export const NotesView: React.FC<NotesViewProps> = ({
       </div>
 
       {/* Main Note Pane */}
-      <div style={{ flex: 1, height: "100%", overflow: "hidden" }}>
+      <div className="detail-pane" style={{ flex: 1, minWidth: 0, minHeight: 0, height: "100%", overflow: "hidden" }}>
         {selectedNote.captures != null ? (
           <DayNoteView
+            key={selectedNote.id}
             note={selectedNote}
             isToday={isSelectedToday}
             onUpdate={handleUpdateNote}
@@ -372,13 +380,14 @@ export const NotesView: React.FC<NotesViewProps> = ({
           />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: "28px 36px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+            <div className="ui-toolbar" style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
               <input
                 type="text"
                 value={selectedNote.title}
                 onChange={(e) =>
                   handleEdit({ ...selectedNote, title: e.target.value })
                 }
+                aria-label="Note title"
                 placeholder="Note title"
                 style={{
                   fontSize: 24,
@@ -386,15 +395,17 @@ export const NotesView: React.FC<NotesViewProps> = ({
                   border: "none",
                   outline: "none",
                   background: "transparent",
-                  color: "#181a1f"
+                  color: "var(--os-ink)",
+                  flex: 1, minWidth: 0
                 }}
               />
               <button
+                aria-label="Delete note"
                 onClick={() => handleDelete(selectedNote.id)}
                 style={{
                   background: "transparent",
                   border: "none",
-                  color: "#ef4444",
+                  color: "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))",
                   cursor: "pointer"
                 }}
               >
@@ -412,18 +423,18 @@ export const NotesView: React.FC<NotesViewProps> = ({
               }
               placeholder="Write your note here…"
               style={{
-                flex: 1,
+                flex: 1, minWidth: 0, minHeight: 0,
                 border: "none",
                 outline: "none",
                 background: "transparent",
                 resize: "none",
                 fontSize: 15,
                 lineHeight: 1.6,
-                color: "#181a1f",
+                color: "var(--os-ink)",
                 fontFamily: "inherit"
               }}
             />
-            <small role="status">{saveStatus}</small>
+            <small style={{ color: "var(--os-ink-muted)" }} role="status">{saveStatus}</small>
           </div>
         )}
       </div>

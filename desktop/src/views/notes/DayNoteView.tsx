@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   Calendar as CalendarIcon,
@@ -32,6 +32,7 @@ import type {
 } from "../../api/parityTypes";
 import { formatDuration } from "../meetings/transcriptHelpers";
 import { reportUiError, sendIntent } from "../../workspaceEvents";
+import { captureDateForDay } from "./dayNoteHelpers";
 
 interface DayNoteViewProps {
   note: VoiceNote;
@@ -60,7 +61,9 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
   const [showOriginal, setShowOriginal] = useState<Record<string, boolean>>({});
   const [screenshotDropdown, setScreenshotDropdown] = useState(false);
 
-  const captures = note.captures ?? [];
+  const [adding, setAdding] = useState(false);
+  const [attachmentErrors, setAttachmentErrors] = useState<Record<string, boolean>>({});
+  const captures = useMemo(() => (note.captures ?? []).filter(capture => !capture.superseded), [note.captures]);
 
   useEffect(() => {
     // Resolve attachment paths
@@ -73,7 +76,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
               [c.attachment!]: convertFileSrc(p)
             }));
           })
-          .catch(() => undefined);
+          .catch(() => setAttachmentErrors(previous => ({ ...previous, [c.attachment!]: true })));
       }
     });
   }, [captures]);
@@ -81,11 +84,12 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
   const handleAddThought = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = composer.trim();
-    if (!text) return;
+    if (!text || adding) return;
+    setAdding(true);
 
     const newCapture: NoteCapture = {
       id: crypto.randomUUID().toUpperCase(),
-      createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+      createdAt: captureDateForDay(note.createdAt),
       title: "Written note",
       rawText: text,
       text: text,
@@ -99,7 +103,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
       setComposer("");
     } catch (error) {
       reportUiError(error);
-    }
+    } finally { setAdding(false); }
   };
 
   const handleTakeScreenshot = async (kind: "area" | "window" | "screen") => {
@@ -133,7 +137,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
       if (c.text) md += `${c.text}\n\n`;
       if (c.recognizedText) md += `*OCR text:* ${c.recognizedText}\n\n`;
     });
-    navigator.clipboard.writeText(md).catch(console.error);
+    navigator.clipboard.writeText(md).catch(reportUiError);
   };
 
   const dateObj = new Date(note.createdAt);
@@ -148,10 +152,10 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
   const meetingCount = captures.filter((c) => c.kind === "meeting").length;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", padding: "28px 36px" }}>
+    <div className="day-note" style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", padding: "28px 36px" }}>
       {/* Top Toolbar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-        <div style={{ fontSize: 12, color: "#6b7280" }}>
+      <div className="ui-toolbar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+        <div style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
           {[
             dictationCount ? `${dictationCount} dictation${dictationCount > 1 ? "s" : ""}` : null,
             screenshotCount ? `${screenshotCount} screenshot${screenshotCount > 1 ? "s" : ""}` : null,
@@ -165,27 +169,27 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
             title={note.isPinned ? "Unpin day" : "Pin day"}
             style={{
               background: "transparent",
-              border: "1px solid rgba(0,0,0,0.1)",
+              border: "1px solid var(--os-line)",
               borderRadius: 6,
               padding: "5px 8px",
               cursor: "pointer",
-              color: note.isPinned ? "#2563eb" : "#4b5563",
+              color: note.isPinned ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink-muted)",
               display: "flex",
               alignItems: "center"
             }}
           >
-            <Pin size={14} fill={note.isPinned ? "#2563eb" : "none"} />
+            <Pin size={14} fill={note.isPinned ? "var(--os-accent)" : "none"} />
           </button>
           <button
             onClick={handleCopyMarkdown}
             title="Copy day as Markdown"
             style={{
               background: "transparent",
-              border: "1px solid rgba(0,0,0,0.1)",
+              border: "1px solid var(--os-line)",
               borderRadius: 6,
               padding: "5px 8px",
               cursor: "pointer",
-              color: "#4b5563",
+              color: "var(--os-ink-muted)",
               display: "flex",
               alignItems: "center",
               gap: 4,
@@ -199,11 +203,11 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
             title="Delete this day"
             style={{
               background: "transparent",
-              border: "1px solid rgba(239, 68, 68, 0.2)",
+              border: "1px solid var(--os-line)",
               borderRadius: 6,
               padding: "5px 8px",
               cursor: "pointer",
-              color: "#ef4444",
+              color: "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))",
               display: "flex",
               alignItems: "center"
             }}
@@ -215,7 +219,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
 
       {/* Date Header */}
       <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "#2563eb", textTransform: "uppercase" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))", textTransform: "uppercase" }}>
           {isToday ? "TODAY" : dateObj.getFullYear()}
         </div>
         <h1 style={{ fontSize: 28, fontWeight: 700, margin: "4px 0 0", letterSpacing: "-0.03em" }}>
@@ -225,24 +229,24 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
 
       {/* Quick Action Bar (if today) */}
       {isToday && (
-        <div style={{ display: "flex", gap: 10, marginBottom: 28, position: "relative" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 28, position: "relative" }}>
           <button
             onClick={onStartDictation}
             style={{
               display: "flex",
               alignItems: "center",
               gap: 6,
-              background: "#ffffff",
-              border: "1px solid rgba(0,0,0,0.12)",
+              background: "var(--os-surface)",
+              border: "1px solid var(--os-line)",
               borderRadius: 8,
               padding: "6px 14px",
               fontSize: 13,
               fontWeight: 500,
               cursor: "pointer",
-              boxShadow: "0 1px 2px rgba(0,0,0,0.04)"
+              boxShadow: "var(--os-shadow)"
             }}
           >
-            <Mic size={14} color="#2563eb" /> Dictate
+            <Mic size={14} color="var(--os-accent)" /> Dictate
           </button>
 
           <button
@@ -251,47 +255,49 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
               display: "flex",
               alignItems: "center",
               gap: 6,
-              background: "#ffffff",
-              border: "1px solid rgba(0,0,0,0.12)",
+              background: "var(--os-surface)",
+              border: "1px solid var(--os-line)",
               borderRadius: 8,
               padding: "6px 14px",
               fontSize: 13,
               fontWeight: 500,
               cursor: "pointer",
-              boxShadow: "0 1px 2px rgba(0,0,0,0.04)"
+              boxShadow: "var(--os-shadow)"
             }}
           >
-            <Users size={14} color="#ef4444" /> Meeting
+            <Users size={14} color="var(--os-recording)" /> Meeting
           </button>
 
-          <div style={{ position: "relative" }}>
+          <div style={{ position: "relative" }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setScreenshotDropdown(false); }} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setScreenshotDropdown(false); } }}>
             <button
+              aria-expanded={screenshotDropdown}
               onClick={() => setScreenshotDropdown((prev) => !prev)}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
-                background: "#ffffff",
-                border: "1px solid rgba(0,0,0,0.12)",
+                background: "var(--os-surface)",
+                border: "1px solid var(--os-line)",
                 borderRadius: 8,
                 padding: "6px 14px",
                 fontSize: 13,
                 fontWeight: 500,
                 cursor: "pointer",
-                boxShadow: "0 1px 2px rgba(0,0,0,0.04)"
+                boxShadow: "var(--os-shadow)"
               }}
             >
-              <Camera size={14} color="#2563eb" /> Screenshot <ChevronDown size={12} />
+              <Camera size={14} color="var(--os-accent)" /> Screenshot <ChevronDown size={12} />
             </button>
 
             {screenshotDropdown && (
               <div
+                className="capture-menu"
                 style={{
                   position: "absolute",
                   top: 36,
                   left: 0,
-                  background: "#ffffff",
-                  border: "1px solid rgba(0,0,0,0.12)",
+                  background: "var(--os-surface)",
+                  border: "1px solid var(--os-line)",
                   borderRadius: 8,
                   padding: 4,
                   display: "flex",
@@ -299,7 +305,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                   gap: 2,
                   width: 160,
                   zIndex: 50,
-                  boxShadow: "0 6px 16px rgba(0,0,0,0.1)"
+                  boxShadow: "var(--os-shadow)"
                 }}
               >
                 <button
@@ -353,7 +359,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
       {/* Timeline Entries */}
       <div style={{ display: "flex", flexDirection: "column", gap: 20, marginBottom: 30 }}>
         {captures.length === 0 ? (
-          <div style={{ color: "#9ca3af", fontSize: 13.5, fontStyle: "italic", padding: "12px 0" }}>
+          <div style={{ color: "var(--os-ink-muted)", fontSize: 13.5, fontStyle: "italic", padding: "12px 0" }}>
             {isToday
               ? "Your day starts here. Dictations, screenshots, and meetings land here as they happen."
               : "Nothing was captured this day."}
@@ -380,11 +386,11 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                 {/* Time column */}
                 <div
                   style={{
-                    width: 52,
+                    width: 52, flexShrink: 0,
                     textAlign: "right",
                     fontSize: 11,
                     fontFamily: "monospace",
-                    color: "#9ca3af",
+                    color: "var(--os-ink-muted)",
                     paddingTop: 3
                   }}
                 >
@@ -399,9 +405,9 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                     borderRadius: "50%",
                     background:
                       entry.kind === "meeting"
-                        ? "rgba(239, 68, 68, 0.12)"
-                        : "rgba(37, 99, 235, 0.12)",
-                    color: entry.kind === "meeting" ? "#ef4444" : "#2563eb",
+                        ? "var(--os-recording-soft)"
+                        : "var(--os-accent-soft)",
+                    color: entry.kind === "meeting" ? "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))" : "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -415,23 +421,26 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                 </div>
 
                 {/* Entry Content */}
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div className="timeline-content" style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", gap: 6 }}>
                   {entry.kind === "screenshot" ? (
                     <div>
-                      {entry.attachment && screenshotUrls[entry.attachment] && (
+                      {entry.attachment && screenshotUrls[entry.attachment] && !attachmentErrors[entry.attachment] && (
                         <img
+                          className="timeline-image"
+                          onError={() => setAttachmentErrors(previous => ({ ...previous, [entry.attachment!]: true }))}
                           src={screenshotUrls[entry.attachment]}
                           alt="Screenshot capture"
                           style={{
                             maxWidth: 360,
                             maxHeight: 220,
                             borderRadius: 8,
-                            border: "1px solid rgba(0,0,0,0.1)",
+                            border: "1px solid var(--os-line)",
                             display: "block",
                             marginBottom: 6
                           }}
                         />
                       )}
+                      {entry.attachment && attachmentErrors[entry.attachment] && <p role="status">Screenshot preview unavailable.{entry.recognizedText ? " Saved image text is still available below." : ""}</p>}
                       {entry.recognizedText && (
                         <div style={{ marginTop: 4 }}>
                           <button
@@ -445,7 +454,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                               background: "transparent",
                               border: "none",
                               fontSize: 11.5,
-                              color: "#2563eb",
+                              color: "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))",
                               cursor: "pointer",
                               padding: 0,
                               display: "flex",
@@ -465,11 +474,11 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                             <p
                               style={{
                                 fontSize: 12.5,
-                                background: "rgba(0,0,0,0.03)",
+                                background: "var(--os-surface-muted)",
                                 padding: "8px 10px",
                                 borderRadius: 6,
                                 marginTop: 4,
-                                color: "#4b5563"
+                                color: "var(--os-ink-muted)"
                               }}
                             >
                               {entry.recognizedText}
@@ -481,8 +490,8 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                   ) : entry.kind === "meeting" ? (
                     <div
                       style={{
-                        background: "#ffffff",
-                        border: "1px solid rgba(0,0,0,0.1)",
+                        background: "var(--os-surface)",
+                        border: "1px solid var(--os-line)",
                         borderRadius: 10,
                         padding: "10px 14px",
                         display: "flex",
@@ -495,7 +504,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                         <strong style={{ fontSize: 13, display: "block" }}>
                           {entry.title || "Meeting"}
                         </strong>
-                        <span style={{ fontSize: 11.5, color: "#6b7280" }}>
+                        <span style={{ fontSize: 11.5, color: "var(--os-ink-muted)" }}>
                           {entry.duration > 0 ? formatDuration(entry.duration) : "Meeting record"}
                         </span>
                       </div>
@@ -504,7 +513,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                           onClick={() => onOpenMeeting(entry.meetingID!)}
                           style={{
                             background: "transparent",
-                            border: "1px solid rgba(0,0,0,0.1)",
+                            border: "1px solid var(--os-line)",
                             borderRadius: 6,
                             padding: "4px 8px",
                             fontSize: 11,
@@ -519,7 +528,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                       )}
                     </div>
                   ) : (
-                    <div style={{ fontSize: 14.5, lineHeight: 1.6, color: "#181a1f" }}>
+                    <div style={{ fontSize: 14.5, lineHeight: 1.6, color: "var(--os-ink)" }}>
                       {showingRaw ? entry.rawText : entry.text}
                     </div>
                   )}
@@ -529,9 +538,9 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      gap: 10,
+                      gap: 10, flexWrap: "wrap",
                       fontSize: 11,
-                      color: "#9ca3af"
+                      color: "var(--os-ink-muted)"
                     }}
                   >
                     <span>
@@ -554,7 +563,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                         style={{
                           background: "transparent",
                           border: "none",
-                          color: "#2563eb",
+                          color: "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))",
                           cursor: "pointer",
                           padding: 0,
                           fontSize: 11
@@ -565,12 +574,12 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                     )}
 
                     <button
-                      onClick={() => navigator.clipboard.writeText(entry.text || entry.rawText)}
+                      onClick={() => { void navigator.clipboard.writeText(showingRaw ? entry.rawText : entry.text || entry.rawText).catch(reportUiError); }}
                       title="Copy text"
                       style={{
                         background: "transparent",
                         border: "none",
-                        color: "#9ca3af",
+                        color: "var(--os-ink-muted)",
                         cursor: "pointer",
                         padding: 0
                       }}
@@ -584,7 +593,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                       style={{
                         background: "transparent",
                         border: "none",
-                        color: "#ef4444",
+                        color: "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))",
                         cursor: "pointer",
                         padding: 0
                       }}
@@ -607,21 +616,21 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
           onChange={(e) => setComposer(e.target.value)}
           placeholder={isToday ? "Write a thought… (Press Enter to add)" : "Add to this day…"}
           style={{
-            flex: 1,
+            flex: 1, minWidth: 0, minHeight: 0,
             padding: "10px 14px",
             borderRadius: 8,
-            border: "1px solid rgba(0,0,0,0.15)",
-            background: "#ffffff",
+            border: "1px solid var(--os-line)",
+            background: "var(--os-surface)",
             fontSize: 14,
             outline: "none"
           }}
         />
         <button
           type="submit"
-          disabled={!composer.trim()}
+          disabled={!composer.trim() || adding}
           style={{
-            background: "#2563eb",
-            color: "#ffffff",
+            background: "var(--os-accent)",
+            color: "var(--os-primary-text)",
             border: "none",
             borderRadius: 8,
             padding: "0 16px",
@@ -631,7 +640,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
             opacity: composer.trim() ? 1 : 0.5
           }}
         >
-          Add
+          {adding ? "Adding…" : "Add"}
         </button>
       </form>
     </div>
