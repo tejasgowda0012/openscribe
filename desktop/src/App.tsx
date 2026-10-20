@@ -6,6 +6,7 @@ import { MeetingsView } from "./views/meetings/MeetingsView";
 import { NotesView } from "./views/notes/NotesView";
 import { SettingsView } from "./views/settings/SettingsView";
 import type { ParitySettings } from "./api/parityTypes";
+import { useAppliedTheme } from "./theme";
 export { defaultParitySettings } from "./settings";
 
 export default function App() {
@@ -22,12 +23,7 @@ export default function App() {
   useEffect(() => {
     if (navigation) { setSection(navigation.section); if (navigation.meetingId) setSelectedMeetingId(navigation.meetingId); }
   }, [navigation]);
-  useEffect(() => {
-    const query = matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => { document.documentElement.dataset.theme = settings.theme === "system" ? (query.matches ? "dark" : "light") : settings.theme; };
-    apply(); query.addEventListener("change", apply);
-    return () => query.removeEventListener("change", apply);
-  }, [settings.theme]);
+  useAppliedTheme(settings.theme);
   useEffect(() => {
     if (!startPrompt && !endPrompt) return;
     const timer = window.setInterval(() => setNow(Date.now()), 250);
