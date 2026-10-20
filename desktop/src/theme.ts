@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ParitySettings } from "./api/parityTypes";
 import type { WorkspaceStatus } from "./workspaceEvents";
 import "./theme.css";
@@ -22,6 +23,12 @@ export function useAppliedTheme(preference: ThemePreference | undefined): Resolv
   }, []);
   const resolved = resolveTheme(preference, systemDark);
   useEffect(() => { document.documentElement.dataset.theme = resolved; }, [resolved]);
+  // Native chrome (title bar, window frame) follows the same choice, like NSApp.appearance on macOS.
+  // Wait for settings before overriding so "system" never flashes a forced theme.
+  useEffect(() => {
+    if (preference === undefined) return;
+    void getCurrentWindow().setTheme(preference === "system" ? null : preference).catch(console.error);
+  }, [preference]);
   return resolved;
 }
 
