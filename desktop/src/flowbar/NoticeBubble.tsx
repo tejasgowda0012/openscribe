@@ -134,6 +134,11 @@ export const NoticeBubble: React.FC<NoticeBubbleProps> = ({
     return (
       <div
         onClick={onInspectNotice}
+        role={onInspectNotice ? "button" : "status"}
+        tabIndex={onInspectNotice ? 0 : undefined}
+        onKeyDown={event => {
+          if (onInspectNotice && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onInspectNotice(); }
+        }}
         style={{
           background: "var(--os-flowbar)",
           border: "1px solid var(--os-flowbar-line)",
@@ -175,6 +180,9 @@ export const NoticeBubble: React.FC<NoticeBubbleProps> = ({
             e.stopPropagation();
             onDismissNotice();
           }}
+          onKeyDown={event => event.stopPropagation()}
+          aria-label="Dismiss notice"
+          title="Dismiss"
           onMouseEnter={() => setDismissHover(true)}
           onMouseLeave={() => setDismissHover(false)}
           style={{
