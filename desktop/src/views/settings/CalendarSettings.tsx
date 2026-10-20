@@ -8,7 +8,7 @@ import {
   Trash2,
   X
 } from "lucide-react";
-import { calendarRefresh } from "../../api/parity";
+import { CalendarAgenda } from "./CalendarAgenda";
 import type { CalendarEvent, CalendarSource, ParitySettings } from "../../api/parityTypes";
 
 interface CalendarSettingsProps {
@@ -74,12 +74,12 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className="ui-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>
             Calendar Recording & Sources
           </h3>
-          <p style={{ fontSize: 13, color: "#6b7280", margin: 0 }}>
+          <p style={{ fontSize: 13, color: "var(--os-ink-muted)", margin: 0 }}>
             Subscribe to iCal/ICS feeds from Google Calendar, Outlook, or Apple Calendar.
           </p>
         </div>
@@ -88,7 +88,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
             onClick={onRefreshCalendar}
             style={{
               background: "transparent",
-              border: "1px solid rgba(0,0,0,0.12)",
+              border: "1px solid var(--os-line)",
               borderRadius: 6,
               padding: "5px 10px",
               fontSize: 12,
@@ -103,11 +103,13 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
         )}
       </div>
 
+      <CalendarAgenda events={events} settings={settings} />
+
       {/* Recording Preferences Group */}
       <div
         style={{
-          background: "#ffffff",
-          border: "1px solid rgba(0,0,0,0.1)",
+          background: "var(--os-surface)",
+          border: "1px solid var(--os-line)",
           borderRadius: 10,
           padding: "16px 20px",
           display: "flex",
@@ -115,12 +117,12 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
           gap: 16
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <strong style={{ fontSize: 13.5, display: "block" }}>
               Ask to record calendar meetings
             </strong>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
+            <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
               Prompts before upcoming scheduled meetings start.
             </span>
           </div>
@@ -131,14 +133,14 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
           />
         </div>
 
-        <div style={{ height: 1, background: "rgba(0,0,0,0.06)" }} />
+        <div style={{ height: 1, background: "var(--os-line)" }} />
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <strong style={{ fontSize: 13.5, display: "block" }}>
               Only events with meeting links
             </strong>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
+            <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
               Filters out appointments that do not have Google Meet, Zoom, Teams, or Webex links.
             </span>
           </div>
@@ -149,14 +151,14 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
           />
         </div>
 
-        <div style={{ height: 1, background: "rgba(0,0,0,0.06)" }} />
+        <div style={{ height: 1, background: "var(--os-line)" }} />
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <strong style={{ fontSize: 13.5, display: "block" }}>
               Auto-start after 60 seconds
             </strong>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
+            <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
               If unanswered, starts local recording so nothing is lost.
             </span>
           </div>
@@ -167,14 +169,14 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
           />
         </div>
 
-        <div style={{ height: 1, background: "rgba(0,0,0,0.06)" }} />
+        <div style={{ height: 1, background: "var(--os-line)" }} />
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <strong style={{ fontSize: 13.5, display: "block" }}>
               Summarize when meeting ends
             </strong>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
+            <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
               Automatically runs transcription and summary when the scheduled end time is reached.
             </span>
           </div>
@@ -189,8 +191,8 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
       {/* Excluded Titles */}
       <div
         style={{
-          background: "#ffffff",
-          border: "1px solid rgba(0,0,0,0.1)",
+          background: "var(--os-surface)",
+          border: "1px solid var(--os-line)",
           borderRadius: 10,
           padding: "16px 20px"
         }}
@@ -198,22 +200,23 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
         <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: "0 0 6px" }}>
           Always skip matching titles
         </h4>
-        <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 12px" }}>
+        <p style={{ fontSize: 12, color: "var(--os-ink-muted)", margin: "0 0 12px" }}>
           Never prompt to record meetings whose title contains these words (e.g. personal, 1:1).
         </p>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <div className="form-add-row" style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           <input
             type="text"
             value={excludedTitleInput}
             onChange={(e) => setExcludedTitleInput(e.target.value)}
             placeholder="e.g. 1:1, Lunch, Doctor"
-            style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.12)", fontSize: 13 }}
+            style={{ flex: 1, minWidth: 0, minHeight: 0, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--os-line)", fontSize: 13 }}
           />
           <button
+            disabled={!excludedTitleInput.trim() || settings.calendarExcludedTitles.includes(excludedTitleInput.trim())}
             onClick={handleAddExcludedTitle}
             style={{
-              background: "#2563eb",
-              color: "#ffffff",
+              background: "var(--os-accent)",
+              color: "var(--os-primary-text)",
               border: "none",
               borderRadius: 6,
               padding: "0 14px",
@@ -230,7 +233,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
             <span
               key={phrase}
               style={{
-                background: "#f3f4f6",
+                background: "var(--os-surface-muted)",
                 borderRadius: 4,
                 padding: "2px 8px",
                 fontSize: 12,
@@ -244,7 +247,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
                 onClick={() => handleRemoveExcludedTitle(phrase)}
                 style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0 }}
               >
-                <X size={12} color="#6b7280" />
+                <X size={12} color="var(--os-ink-muted)" />
               </button>
             </span>
           ))}
@@ -254,8 +257,8 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
       {/* Calendar Sources */}
       <div
         style={{
-          background: "#ffffff",
-          border: "1px solid rgba(0,0,0,0.1)",
+          background: "var(--os-surface)",
+          border: "1px solid var(--os-line)",
           borderRadius: 10,
           padding: "16px 20px"
         }}
@@ -263,30 +266,31 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
         <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: "0 0 6px" }}>
           Calendar Sources (ICS / iCal Feeds)
         </h4>
-        <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 12px" }}>
+        <p style={{ fontSize: 12, color: "var(--os-ink-muted)", margin: "0 0 12px" }}>
           Add your Google Calendar secret iCal URL or Outlook published calendar URL.
         </p>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div className="form-add-row" style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <input
             type="text"
             placeholder="Calendar Name (e.g. Work)"
             value={sourceName}
             onChange={(e) => setSourceName(e.target.value)}
-            style={{ width: 140, padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.12)", fontSize: 13 }}
+            style={{ width: 140, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--os-line)", fontSize: 13 }}
           />
           <input
             type="text"
             placeholder="https://calendar.google.com/.../basic.ics"
             value={sourceUrl}
             onChange={(e) => setSourceUrl(e.target.value)}
-            style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(0,0,0,0.12)", fontSize: 13 }}
+            style={{ flex: 1, minWidth: 0, minHeight: 0, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--os-line)", fontSize: 13 }}
           />
           <button
+            disabled={!sourceName.trim() || !sourceUrl.trim()}
             onClick={handleAddSource}
             style={{
-              background: "#2563eb",
-              color: "#ffffff",
+              background: "var(--os-accent)",
+              color: "var(--os-primary-text)",
               border: "none",
               borderRadius: 6,
               padding: "0 14px",
@@ -305,20 +309,21 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
               key={source.id}
               style={{
                 display: "flex",
+                flexWrap: "wrap", gap: 12,
                 alignItems: "center",
                 justifyContent: "space-between",
                 padding: "8px 12px",
-                background: "#f9fafb",
+                background: "var(--os-surface-muted)",
                 borderRadius: 6
               }}
             >
               <div>
                 <strong style={{ fontSize: 13, display: "block" }}>{source.name}</strong>
-                <span style={{ fontSize: 11.5, color: "#6b7280" }}>{source.url}</span>
+                <span style={{ fontSize: 11.5, color: "var(--os-ink-muted)" }}>{source.url}</span>
               </div>
               <button
                 onClick={() => handleRemoveSource(source.id)}
-                style={{ background: "transparent", border: "none", color: "#ef4444", cursor: "pointer" }}
+                style={{ background: "transparent", border: "none", color: "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))", cursor: "pointer" }}
               >
                 <Trash2 size={13} />
               </button>
