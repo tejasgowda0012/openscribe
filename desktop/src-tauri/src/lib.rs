@@ -95,6 +95,12 @@ fn has_credential(account: String) -> Result<bool, String> {
     credentials::read(&account).map(|value| value.is_some())
 }
 
+/// Reuses one saved key for another scope without the secret ever reaching the webview.
+#[tauri::command]
+fn copy_credential(from: String, to: String) -> Result<(), String> {
+    credentials::copy(&from, &to)
+}
+
 #[tauri::command]
 fn remove_credential(account: String) -> Result<(), String> {
     credentials::remove(&account)
@@ -176,6 +182,7 @@ pub fn run() {
             delete_recording,
             save_credential,
             has_credential,
+            copy_credential,
             remove_credential,
             transcribe_recording,
             clean_transcript,

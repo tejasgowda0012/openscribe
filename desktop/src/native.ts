@@ -29,6 +29,7 @@ export const native = {
   setDictationBusy: (busy: boolean) => invoke<void>("set_dictation_busy", { busy }),
   saveCredential: (account: string, secret: string) => invoke<void>("save_credential", { account, secret }),
   hasCredential: (account: string) => invoke<boolean>("has_credential", { account }),
+  copyCredential: (from: string, to: string) => invoke<void>("copy_credential", { from, to }),
   removeCredential: (account: string) => invoke<void>("remove_credential", { account }),
   async paste(text: string) {
     const previous = await readText().catch(() => "");
