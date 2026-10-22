@@ -164,12 +164,17 @@ export const NoticeBubble: React.FC<NoticeBubbleProps> = ({
           }}
         />
         <span
+          title={notice}
           style={{
             fontSize: 11.5,
             fontWeight: 500,
+            lineHeight: 1.35,
+            // Wrap instead of cutting the message off; macOS allows two lines, Windows messages run longer.
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: 3,
             overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            overflowWrap: "anywhere",
             flex: 1
           }}
         >

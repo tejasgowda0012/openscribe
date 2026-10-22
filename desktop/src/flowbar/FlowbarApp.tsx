@@ -145,7 +145,9 @@ export const FlowbarApp: React.FC = () => {
     } catch (error) { reportUiError(error); }
   };
   return <div style={{ width: windowWidth, height: windowHeight, background: "transparent", fontFamily: "system-ui", position: "relative", overflow: "hidden" }}>
-    <div style={{ position: "absolute", left: 10, width: 300, maxHeight: 220, overflowY: "auto", top: above ? Math.max(4, pillCenter.y - 220) : pillCenter.y + 26, zIndex: 30 }}>
+    {/* Anchor the bubble to the pill's edge so it sits right next to the bar, as on macOS. */}
+    <div style={{ position: "absolute", left: 10, width: 300, maxHeight: 220, overflowY: "auto", zIndex: 30, display: "flex", flexDirection: "column", alignItems: "center",
+      ...(above ? { bottom: Math.max(4, windowHeight - pillCenter.y + pillHeight / 2 + 8) } : { top: pillCenter.y + pillHeight / 2 + 8 }) }}>
       <NoticeBubble notice={notice} isError shortMeeting={shortMeeting}
         onDismissNotice={() => send("dismissNotice")} onInspectNotice={() => openMain("settings")}
         onResolveShortMeeting={action => { void resolveShort(action); }} />
