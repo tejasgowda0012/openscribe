@@ -213,6 +213,7 @@ pub fn run() {
             integration::set_dictation_busy,
             shortcuts::register_shortcuts,
             shortcuts::suspend_shortcuts,
+            shortcuts::set_escape_active,
             calendar::calendar_refresh,
             calendar::calendar_decision,
             screenshot::take_screenshot,

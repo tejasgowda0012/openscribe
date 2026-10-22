@@ -131,14 +131,20 @@ export async function applyDictionary(
   return invoke<DictionaryResult>("apply_dictionary", { text, settings });
 }
 
+/** Resolves to the actions whose keys another app already holds; the others are active. */
 export async function registerShortcuts(
   bindings: Record<string, ShortcutBinding>
-): Promise<void> {
-  return invoke<void>("register_shortcuts", { bindings });
+): Promise<string[]> {
+  return (await invoke<string[] | null>("register_shortcuts", { bindings })) ?? [];
 }
 
-export async function suspendShortcuts(suspended: boolean): Promise<void> {
-  return invoke<void>("suspend_shortcuts", { suspended });
+export async function suspendShortcuts(suspended: boolean): Promise<string[]> {
+  return (await invoke<string[] | null>("suspend_shortcuts", { suspended })) ?? [];
+}
+
+/** Escape cancels dictation from any app, and is claimed only while recording. */
+export async function setEscapeActive(active: boolean): Promise<void> {
+  return invoke<void>("set_escape_active", { active });
 }
 
 export async function calendarRefresh(): Promise<CalendarEvent[]> {
@@ -206,6 +212,9 @@ export const parityEvents = {
   },
   onShortcutAction(handler: (payload: ShortcutActionEvent) => void): Promise<UnlistenFn> {
     return listen<ShortcutActionEvent>("shortcut://action", (event) => handler(event.payload));
+  },
+  onShortcutEscape(handler: () => void): Promise<UnlistenFn> {
+    return listen("shortcut://escape", () => handler());
   },
   onCalendarPromptStart(handler: (payload: CalendarPromptStartEvent) => void): Promise<UnlistenFn> {
     return listen<CalendarPromptStartEvent>("calendar://prompt-start", (event) => handler(event.payload));

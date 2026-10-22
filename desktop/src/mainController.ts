@@ -4,7 +4,7 @@ import * as api from "./api/parity";
 import type { CalendarEvent, MeetingRecord, ParitySettings, VoiceNote } from "./api/parityTypes";
 import type { CalendarPrompt } from "./core/calendarPolicy";
 import { pasteLastText } from "./core/dailyNotes";
-import { shortcutActions, ShortcutInterpreter, type ShortcutAction, validateBindings } from "./core/shortcuts";
+import { shortcutActions, ShortcutInterpreter, shortcutTitles, type ShortcutAction, validateBindings } from "./core/shortcuts";
 import { DictationController, type DictationJob, type DictationPhase } from "./dictation";
 import { cleanupInstructions } from "./defaults";
 import { ListenerScope } from "./listeners";
@@ -20,12 +20,14 @@ export interface MainState {
   calendarEvents: CalendarEvent[]; inputs: AudioInput[]; phase: DictationPhase; loaded: boolean;
   storageError: string | null; notice: string | null; startPrompt: CalendarPrompt | null; endPrompt: CalendarPrompt | null;
   navigation?: { section: "notes" | "meetings" | "settings"; meetingId?: string };
+  /** Actions whose shortcut another app holds, as macOS reports them. */
+  shortcutFailures: ShortcutAction[];
 }
 
 /** One instance lives in main, including while its window is hidden. */
 export class MainController {
   state: MainState = { settings: defaultParitySettings, notes: [], meetings: [], recoveries: [], calendarEvents: [], inputs: [],
-    phase: "idle", loaded: false, storageError: null, notice: null, startPrompt: null, endPrompt: null };
+    phase: "idle", loaded: false, storageError: null, notice: null, startPrompt: null, endPrompt: null, shortcutFailures: [] };
   private observers = new Set<() => void>();
   private initialization?: Promise<void>;
   private scope = new ListenerScope();
@@ -36,6 +38,7 @@ export class MainController {
   private busyUpdate: Promise<unknown> = Promise.resolve();
   private settingsWrites: Promise<unknown> = Promise.resolve();
   private notesRefresh = 0;
+  private escapeActive = false;
   readonly dictation = new DictationController({
     settings: () => this.state.settings,
     start: async device => { await this.busyUpdate; return native.startRecording(device); },
@@ -71,6 +74,8 @@ export class MainController {
       // Serialize transitions so an older idle update cannot overtake a new start.
       this.busyUpdate = this.busyUpdate.catch(() => undefined).then(() => native.setDictationBusy(phase !== "idle"));
       void this.busyUpdate.catch(this.error);
+      const escape = phase === "starting" || phase === "recording";
+      if (escape !== this.escapeActive) { this.escapeActive = escape; void api.setEscapeActive(escape).catch(this.error); }
     },
     error: error => this.error(error)
   });
@@ -118,6 +123,9 @@ export class MainController {
         else void this.intent({ action: intent as "meeting" | "pasteLast" });
       }
     }));
+    add(api.parityEvents.onShortcutEscape(() => {
+      if (this.dictation.phase === "starting" || this.dictation.phase === "recording") void this.dictation.finish(true);
+    }));
     add(listen<WorkspaceIntent>("workspace://intent", event => { void this.intent(event.payload).catch(this.error); }));
     add(listen("workspace://request-state", () => { void this.publish().catch(this.error); }));
     add(listen<string>("workspace://error", event => this.error(event.payload)));
@@ -133,8 +141,10 @@ export class MainController {
     results.forEach(result => { if (result.status === "rejected") this.error(result.reason); });
     this.ready = results[0].status === "fulfilled" && results[3].status === "fulfilled";
     if (this.ready) {
-      try { await api.registerShortcuts(this.state.settings.shortcuts); await native.setDictationBusy(false); }
-      catch (error) { this.error(error); }
+      try {
+        this.setShortcutFailures(await api.registerShortcuts(this.state.settings.shortcuts), true);
+        await native.setDictationBusy(false);
+      } catch (error) { this.error(error); }
     }
     this.patch({ loaded: true });
     void this.refreshCalendar().catch(this.error);
@@ -151,15 +161,29 @@ export class MainController {
       validateBindings(settings.shortcuts);
       const previous = this.state.settings;
       const bindingsChanged = JSON.stringify(previous.shortcuts) !== JSON.stringify(settings.shortcuts);
-      if (bindingsChanged) await api.registerShortcuts(settings.shortcuts);
+      const failures = bindingsChanged ? await api.registerShortcuts(settings.shortcuts) : null;
       try { await api.saveSettings(settings); }
-      catch (error) { if (bindingsChanged) await api.registerShortcuts(previous.shortcuts).catch(this.error); throw error; }
+      catch (error) {
+        if (bindingsChanged) await api.registerShortcuts(previous.shortcuts).then(restored => this.setShortcutFailures(restored)).catch(this.error);
+        throw error;
+      }
+      if (failures) this.setShortcutFailures(failures);
       this.patch({ settings });
       if (previous.calendarEnabled !== settings.calendarEnabled || JSON.stringify(previous.calendarSources) !== JSON.stringify(settings.calendarSources)) void this.refreshCalendar().catch(this.error);
     });
     this.settingsWrites = write;
     return write;
   };
+  /** Pauses global shortcuts while Settings records a new one. */
+  suspendShortcuts = async (suspended: boolean) => { this.setShortcutFailures(await api.suspendShortcuts(suspended)); };
+  private setShortcutFailures(failures: string[], announce = false) {
+    const shortcutFailures = shortcutActions.filter(action => failures.includes(action));
+    if (JSON.stringify(shortcutFailures) !== JSON.stringify(this.state.shortcutFailures)) this.patch({ shortcutFailures });
+    if (announce && shortcutFailures.length) {
+      const keys = shortcutFailures.map(action => `${shortcutTitles[action]} (${this.state.settings.shortcuts[action]?.display ?? "?"})`).join(", ");
+      this.error(`Some shortcuts aren’t active because another app is using their keys: ${keys}. Choose different keys in Settings → Shortcuts.`);
+    }
+  }
   setNotes = (notes: VoiceNote[]) => this.patch({ notes });
   setMeetings = (_meetings: MeetingRecord[]) => { void this.refreshMeetings().catch(this.error); };
   async clearNotes() {

@@ -51,3 +51,22 @@ export class ShortcutInterpreter {
   }
   reset() { this.down.clear(); this.dictatePressedAt = undefined; }
 }
+export const shortcutTitles: Record<ShortcutAction, string> = { dictate: "Dictate", holdToTalk: "Push to talk", meeting: "Start or stop a meeting", screenshotArea: "Screenshot an area", screenshotWindow: "Screenshot a window", screenshotScreen: "Screenshot the screen", pasteLast: "Paste last dictation" };
+/** As on macOS, assigning a shortcut takes it from any other action so one press never does two things. */
+export function assignShortcut(bindings: ShortcutBindings, action: ShortcutAction, binding: ShortcutBinding | null): { bindings: ShortcutBindings; displaced?: ShortcutAction } {
+  const next: ShortcutBindings = { ...bindings };
+  let displaced: ShortcutAction | undefined;
+  if (binding) {
+    for (const other of shortcutActions) {
+      if (other !== action && next[other]?.accelerator.toLowerCase() === binding.accelerator.toLowerCase()) { delete next[other]; displaced = other; }
+    }
+    next[action] = binding;
+  } else delete next[action];
+  return { bindings: next, displaced };
+}
+/** The shortcut shown in hints: Dictate, or Push to talk when Dictate has none. */
+export function dictationHint(bindings: ShortcutBindings, failures: readonly string[] = []): string | null {
+  if (bindings.dictate) return failures.includes("dictate") ? null : bindings.dictate.display;
+  if (bindings.holdToTalk) return failures.includes("holdToTalk") ? null : bindings.holdToTalk.display;
+  return null;
+}

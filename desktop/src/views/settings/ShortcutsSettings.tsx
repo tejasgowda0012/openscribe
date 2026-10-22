@@ -1,13 +1,8 @@
-import React, { useEffect, useState } from "react";
-import { AlertTriangle, Command, RotateCcw } from "lucide-react";
-import { suspendShortcuts } from "../../api/parity";
-import type {
-  ParitySettings,
-  ShortcutAction,
-  ShortcutBinding
-} from "../../api/parityTypes";
-
-import { defaultBindings, parseAccelerator, validateBindings } from "../../core/shortcuts";
+import React, { useEffect, useState, useSyncExternalStore } from "react";
+import { AlertTriangle, MoreHorizontal } from "lucide-react";
+import type { ParitySettings, ShortcutAction, ShortcutBinding } from "../../api/parityTypes";
+import { assignShortcut, defaultBindings, parseAccelerator, shortcutTitles } from "../../core/shortcuts";
+import { mainController } from "../../mainController";
 import { reportUiError } from "../../workspaceEvents";
 
 interface ShortcutsSettingsProps {
@@ -15,227 +10,152 @@ interface ShortcutsSettingsProps {
   onUpdateSettings: (settings: ParitySettings) => void | Promise<void>;
 }
 
-const DEFAULT_SHORTCUTS = defaultBindings;
-
-const ACTION_DESCRIPTIONS: Record<
-  ShortcutAction,
-  { title: string; detail: string }
-> = {
-  dictate: {
-    title: "Dictate",
-    detail: "Tap to dictate, and tap again when done"
-  },
-  holdToTalk: {
-    title: "Hold to talk",
-    detail: "Hold to dictate, release to finish"
-  },
-  meeting: {
-    title: "Start or stop meeting",
-    detail: "Records your microphone and system audio"
-  },
-  screenshotArea: {
-    title: "Area screenshot",
-    detail: "Drag to capture a region and add it to today’s note"
-  },
-  screenshotWindow: {
-    title: "Window screenshot",
-    detail: "Click a window to capture it"
-  },
-  screenshotScreen: {
-    title: "Screen screenshot",
-    detail: "Capture the active monitor"
-  },
-  pasteLast: {
-    title: "Paste last note",
-    detail: "Paste the most recent dictation or note into the active app"
-  }
+// Copy and grouping follow the macOS Shortcuts tab.
+const DETAILS: Record<ShortcutAction, string> = {
+  dictate: "Tap to start and stop. Hold to talk, release to finish.",
+  holdToTalk: "Records only while held down.",
+  meeting: "Records your microphone and system audio.",
+  screenshotArea: "Drag to select. Saved to today’s note.",
+  screenshotWindow: "Click a window. Saved to today’s note.",
+  screenshotScreen: "The screen under your pointer. Saved to today’s note.",
+  pasteLast: "Pastes your latest dictation into the focused app."
 };
+const GROUPS: { title: string; footer: string; actions: ShortcutAction[] }[] = [
+  { title: "Dictation", footer: "A quick tap of the Dictate shortcut keeps recording until you tap again. Hold it to talk, and release to finish.", actions: ["dictate", "holdToTalk", "pasteLast"] },
+  { title: "Meetings & screenshots", footer: "Screenshots are added to today’s note, and text in them becomes searchable.", actions: ["meeting", "screenshotArea", "screenshotWindow", "screenshotScreen"] }
+];
 
-export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({
-  settings,
-  onUpdateSettings
-}) => {
+const secondaryButton: React.CSSProperties = { background: "var(--os-surface)", color: "var(--os-ink)", border: "1px solid var(--os-line)", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 500, cursor: "pointer" };
+
+/** Reads a key press as an accelerator; modifier-only presses wait for the key. */
+function bindingFromEvent(event: KeyboardEvent): ShortcutBinding | null {
+  if (["Control", "Alt", "Shift", "Meta", "AltGraph"].includes(event.key)) return null;
+  const key = event.key === " " ? "Space" : event.code.startsWith("Key") ? event.code.slice(3) : event.code.startsWith("Digit") ? event.code.slice(5) : event.key;
+  return parseAccelerator([event.ctrlKey && "Ctrl", event.altKey && "Alt", event.shiftKey && "Shift", event.metaKey && "Super", key].filter(Boolean).join("+"));
+}
+
+function Keycaps({ display, dimmed }: { display: string; dimmed: boolean }) {
+  return <span style={{ display: "inline-flex", gap: 4, opacity: dimmed ? 0.45 : 1 }}>
+    {display.split(" ").map((key, index) => <kbd key={index} style={{ background: "var(--os-surface-muted)", border: "1px solid var(--os-line)", borderRadius: 5, padding: "2px 7px", fontFamily: "inherit", fontSize: 12, fontWeight: 600, color: "var(--os-ink)" }}>{key}</kbd>)}
+  </span>;
+}
+
+export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({ settings, onUpdateSettings }) => {
   const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(null);
-
+  const [menuAction, setMenuAction] = useState<ShortcutAction | null>(null);
+  const [flash, setFlash] = useState("");
+  const [recordError, setRecordError] = useState("");
+  const { shortcutFailures } = useSyncExternalStore(mainController.subscribe, mainController.snapshot);
   const shortcuts = settings.shortcuts ?? {};
 
-  // Detect conflicts: duplicate accelerators across actions
-  const conflicts = React.useMemo(() => {
-    const map = new Map<string, ShortcutAction[]>();
-    (Object.keys(ACTION_DESCRIPTIONS) as ShortcutAction[]).forEach((action) => {
-      const binding = shortcuts[action];
-      if (binding?.accelerator) {
-        const acc = binding.accelerator.toLowerCase();
-        if (!map.has(acc)) map.set(acc, []);
-        map.get(acc)!.push(action);
-      }
-    });
+  useEffect(() => {
+    if (!flash) return;
+    const timer = window.setTimeout(() => setFlash(""), 2400);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
 
-    const conflictingActions = new Set<ShortcutAction>();
-    for (const [_, actions] of map.entries()) {
-      if (actions.length > 1) {
-        actions.forEach((a) => conflictingActions.add(a));
-      }
-    }
-    return conflictingActions;
-  }, [shortcuts]);
+  const assign = (action: ShortcutAction, binding: ShortcutBinding | null) => {
+    setRecordingAction(null); setMenuAction(null); setRecordError("");
+    const { bindings, displaced } = assignShortcut(shortcuts, action, binding);
+    void Promise.resolve(onUpdateSettings({ ...settings, shortcuts: bindings }))
+      .then(() => { if (displaced) setFlash(`Removed from “${shortcutTitles[displaced]}”`); })
+      .catch(reportUiError);
+  };
 
   useEffect(() => {
     if (!recordingAction) return;
     let active = true;
     const handleKeyDown = (event: KeyboardEvent) => {
       event.preventDefault(); event.stopPropagation();
-      if (event.key === "Escape") { setRecordingAction(null); return; }
-      if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
+      if (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.shiftKey) { setRecordingAction(null); setRecordError(""); return; }
       try {
-        const key = event.key === " " ? "Space" : event.code.startsWith("Key") ? event.code.slice(3) : event.code.startsWith("Digit") ? event.code.slice(5) : event.key;
-        const binding = parseAccelerator([event.ctrlKey && "Ctrl", event.altKey && "Alt", event.shiftKey && "Shift", event.metaKey && "Super", key].filter(Boolean).join("+"));
-        const next = { ...shortcuts, [recordingAction]: binding }; validateBindings(next);
-        void Promise.resolve(onUpdateSettings({ ...settings, shortcuts: next })).catch(reportUiError).finally(() => { if (active) setRecordingAction(null); });
-      } catch (error) { reportUiError(error); }
+        const binding = bindingFromEvent(event);
+        if (binding) assign(recordingAction, binding);
+      } catch (error) { setRecordError(error instanceof Error ? error.message : String(error)); }
     };
-    void suspendShortcuts(true).then(() => {
-      if (active) window.addEventListener("keydown", handleKeyDown);
-      else return suspendShortcuts(false);
+    // Global shortcuts are paused so pressing the current keys records them instead of firing them.
+    void mainController.suspendShortcuts(true).then(() => {
+      if (active) window.addEventListener("keydown", handleKeyDown, true);
+      else return mainController.suspendShortcuts(false);
     }).catch(error => { reportUiError(error); setRecordingAction(null); });
     return () => {
-      active = false; window.removeEventListener("keydown", handleKeyDown);
-      void suspendShortcuts(false).catch(reportUiError);
+      active = false; window.removeEventListener("keydown", handleKeyDown, true);
+      void mainController.suspendShortcuts(false).catch(reportUiError);
     };
   }, [recordingAction, shortcuts, settings, onUpdateSettings]);
 
-  const handleRestoreDefaults = () => { void Promise.resolve(onUpdateSettings({ ...settings, shortcuts: DEFAULT_SHORTCUTS })).catch(reportUiError); };
+  const restoreDefaults = () => {
+    setRecordingAction(null); setMenuAction(null);
+    void Promise.resolve(onUpdateSettings({ ...settings, shortcuts: defaultBindings })).then(() => setFlash("Shortcuts restored")).catch(reportUiError);
+  };
+
+  const row = (action: ShortcutAction, last: boolean) => {
+    const binding = shortcuts[action];
+    const recording = recordingAction === action;
+    const failed = shortcutFailures.includes(action);
+    const fallback = defaultBindings[action];
+    return <div key={action} style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between", padding: "12px 16px",
+      borderBottom: last ? "none" : "1px solid var(--os-line)", background: recording ? "var(--os-accent-soft)" : "transparent" }}>
+      <div style={{ minWidth: 0, flex: "1 1 240px" }}>
+        <strong style={{ fontSize: 13.5 }}>{shortcutTitles[action]}</strong>
+        <div style={{ fontSize: 12, color: recording && recordError ? "var(--os-recording)" : "var(--os-ink-muted)" }}>
+          {recording ? recordError || "Press the new shortcut. Escape cancels." : failed ? "Another app is using these keys. Choose different ones." : DETAILS[action]}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {recording ? <span style={{ fontSize: 12, fontWeight: 500, color: "var(--os-accent)" }}>Listening…</span>
+          : binding ? <Keycaps display={binding.display} dimmed={failed} />
+          : <span style={{ fontSize: 12, color: "var(--os-ink-faint, var(--os-ink-muted))" }}>Not set</span>}
+        <button style={recording ? { ...secondaryButton, background: "var(--os-accent)", color: "var(--os-surface)" } : secondaryButton}
+          onClick={() => { setRecordError(""); setMenuAction(null); setRecordingAction(recording ? null : action); }}>
+          {recording ? "Cancel" : binding ? "Change" : "Set"}
+        </button>
+        <div style={{ position: "relative" }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setMenuAction(null); }}
+          onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setMenuAction(null); } }}>
+          <button style={{ ...secondaryButton, padding: "4px 6px", display: "flex" }} title="More options" aria-label={`More options for ${shortcutTitles[action]}`}
+            aria-haspopup="menu" aria-expanded={menuAction === action} onClick={() => setMenuAction(menuAction === action ? null : action)}>
+            <MoreHorizontal size={14} />
+          </button>
+          {menuAction === action && <div role="menu" style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 20, minWidth: 200, background: "var(--os-surface)",
+            border: "1px solid var(--os-line)", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.18)", padding: 4, display: "flex", flexDirection: "column" }}>
+            {fallback && <button role="menuitem" className="shortcut-menu-item" style={{ textAlign: "left", background: "transparent", border: "none", padding: "6px 10px", fontSize: 12.5, cursor: "pointer", color: "var(--os-ink)", borderRadius: 5 }}
+              onClick={() => assign(action, fallback)}>Use default ({fallback.display})</button>}
+            <button role="menuitem" disabled={!binding} style={{ textAlign: "left", background: "transparent", border: "none", padding: "6px 10px", fontSize: 12.5, cursor: binding ? "pointer" : "default", color: binding ? "var(--os-recording)" : "var(--os-ink-muted)", borderRadius: 5 }}
+              onClick={() => assign(action, null)}>Remove shortcut</button>
+          </div>}
+        </div>
+      </div>
+    </div>;
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      {/* Header */}
-      <div className="ui-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>
-            Keyboard Shortcuts
-          </h3>
-          <p style={{ fontSize: 13, color: "var(--os-ink-muted)", margin: 0 }}>
-            Global hotkeys that work from any application on your PC.
-          </p>
-        </div>
-        <button
-          onClick={handleRestoreDefaults}
-          style={{
-            background: "transparent",
-            border: "1px solid var(--os-line)",
-            borderRadius: 6,
-            padding: "5px 10px",
-            fontSize: 12,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 5
-          }}
-        >
-          <RotateCcw size={12} /> Restore defaults
-        </button>
+      <div>
+        <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>Keyboard Shortcuts</h3>
+        <p style={{ fontSize: 13, color: "var(--os-ink-muted)", margin: 0 }}>Shortcuts work in every app and don’t type into it.</p>
       </div>
 
-      {/* Conflict Warning */}
-      {conflicts.size > 0 && (
-        <div
-          style={{
-            background: "var(--os-warning-soft)",
-            border: "1px solid var(--os-line)",
-            borderRadius: 8,
-            padding: "10px 14px",
-            display: "flex",
-            alignItems: "center",
-            gap: 10
-          }}
-        >
-          <AlertTriangle size={18} color="var(--os-warning)" />
-          <span style={{ fontSize: 12.5, color: "var(--os-ink)" }}>
-            Some shortcuts have conflicting key combinations. Please assign distinct hotkeys.
-          </span>
+      {shortcutFailures.length > 0 && (
+        <div role="alert" style={{ background: "var(--os-warning-soft)", border: "1px solid var(--os-line)", borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "flex-start", gap: 10 }}>
+          <AlertTriangle size={18} color="var(--os-warning)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ fontSize: 12.5, color: "var(--os-ink)" }}>
+            <strong style={{ display: "block" }}>Some shortcuts aren’t active</strong>
+            {shortcutFailures.map(action => shortcutTitles[action]).join(", ")}. Another app may be using their keys; choose different ones.
+          </div>
         </div>
       )}
 
-      {/* Actions List */}
-      <div
-        style={{
-          background: "var(--os-surface)",
-          border: "1px solid var(--os-line)",
-          borderRadius: 10,
-          overflow: "hidden"
-        }}
-      >
-        {(Object.keys(ACTION_DESCRIPTIONS) as ShortcutAction[]).map((action, idx) => {
-          const info = ACTION_DESCRIPTIONS[action];
-          const binding = shortcuts[action] ?? DEFAULT_SHORTCUTS[action];
-          const isRecording = recordingAction === action;
-          const hasConflict = conflicts.has(action);
+      {GROUPS.map(group => <section key={group.title} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <h4 style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "var(--os-ink-muted)", textTransform: "uppercase", letterSpacing: 0.4 }}>{group.title}</h4>
+        <div style={{ background: "var(--os-surface)", border: "1px solid var(--os-line)", borderRadius: 10 }}>
+          {group.actions.map((action, index) => row(action, index === group.actions.length - 1))}
+        </div>
+        <p style={{ margin: 0, fontSize: 12, color: "var(--os-ink-muted)" }}>{group.footer}</p>
+      </section>)}
 
-          return (
-            <div
-              key={action}
-              style={{
-                display: "flex",
-                flexWrap: "wrap", gap: 12,
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "12px 16px",
-                borderBottom:
-                  idx === Object.keys(ACTION_DESCRIPTIONS).length - 1
-                    ? "none"
-                    : "1px solid var(--os-line)",
-                background: isRecording ? "var(--os-accent-soft)" : "transparent"
-              }}
-            >
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <strong style={{ fontSize: 13.5 }}>{info.title}</strong>
-                  {hasConflict && (
-                    <span style={{ fontSize: 11, color: "var(--os-ink)", fontWeight: 600 }}>
-                      (Conflict)
-                    </span>
-                  )}
-                </div>
-                <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
-                  {isRecording ? "Press the new keys on your keyboard. Esc cancels." : info.detail}
-                </span>
-              </div>
-
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span
-                  style={{
-                    background: hasConflict ? "var(--os-recording-soft)" : "var(--os-surface-muted)",
-                    border: hasConflict ? "1px solid var(--os-line)" : "1px solid var(--os-line)",
-                    borderRadius: 6,
-                    padding: "3px 8px",
-                    fontFamily: "monospace",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: isRecording ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink)"
-                  }}
-                >
-                  {isRecording ? "Listening…" : binding?.display ?? "Not set"}
-                </span>
-
-                <button
-                  onClick={() => setRecordingAction(isRecording ? null : action)}
-                  style={{
-                    background: isRecording ? "var(--os-accent)" : "var(--os-surface)",
-                    color: isRecording ? "var(--os-surface)" : "var(--os-ink)",
-                    border: "1px solid var(--os-line)",
-                    borderRadius: 6,
-                    padding: "4px 10px",
-                    fontSize: 12,
-                    fontWeight: 500,
-                    cursor: "pointer"
-                  }}
-                >
-                  {isRecording ? "Cancel" : "Change"}
-                </button>
-              </div>
-            </div>
-          );
-        })}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <span role="status" aria-live="polite" style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>{flash}</span>
+        <button style={secondaryButton} onClick={restoreDefaults}>Restore defaults</button>
       </div>
     </div>
   );

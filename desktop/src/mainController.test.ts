@@ -55,6 +55,27 @@ describe("main window integration", () => {
     expect(Object.keys(app.state.settings.shortcuts)).toHaveLength(7);
   });
 
+  it("keeps the other shortcuts when another app holds one, and reports it as macOS does", async () => {
+    const original = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation(async (command: string, args: any) => command === "register_shortcuts" ? ["dictate"] : original(command, args));
+    const app = new MainController(); await app.initialize();
+    expect(app.state.shortcutFailures).toEqual(["dictate"]);
+    expect(app.state.notice).toContain("Dictate (Ctrl Alt Space)");
+    mocks.invoke.mockImplementation(original);
+    await app.updateSettings({ ...app.state.settings, shortcuts: { ...app.state.settings.shortcuts, dictate: { accelerator: "Ctrl+Shift+F9", display: "Ctrl Shift F9" } } });
+    expect(app.state.shortcutFailures).toEqual([]);
+  });
+
+  it("claims Escape only while recording and cancels the dictation with it", async () => {
+    const app = new MainController(); await app.initialize();
+    await app.startDictation(); await settle();
+    expect(calls("set_escape_active").map(call => call[1])).toEqual([{ active: true }]);
+    fire("shortcut://escape", null); await settle();
+    expect(app.dictation.phase).toBe("idle");
+    expect(calls("set_escape_active").map(call => call[1])).toEqual([{ active: true }, { active: false }]);
+    expect(calls("transcribe_recording")).toHaveLength(0);
+  });
+
   it("finishes a hold released during microphone startup through the same controller", async () => {
     let started!: () => void;
     const original = mocks.invoke.getMockImplementation()!;

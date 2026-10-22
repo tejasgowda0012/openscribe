@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState, useSyncExternalStore } from "r
 import { Window } from "@tauri-apps/api/window";
 import { AlertTriangle, CalendarDays, CircleStop, FileAudio, Library, Mic, Settings, Users, X } from "lucide-react";
 import { mainController } from "./mainController";
+import { dictationHint } from "./core/shortcuts";
 import { MeetingsView } from "./views/meetings/MeetingsView";
 import { NotesView } from "./views/notes/NotesView";
 import { SettingsView } from "./views/settings/SettingsView";
@@ -11,8 +12,10 @@ import { ConfirmDialog } from "./views/ConfirmDialog";
 export { defaultParitySettings } from "./settings";
 
 export default function App() {
-  const { settings, notes, meetings, calendarEvents, recoveries, inputs, loaded, storageError, notice, phase, startPrompt, endPrompt, navigation } = useSyncExternalStore(mainController.subscribe, mainController.snapshot);
+  const { settings, notes, meetings, calendarEvents, recoveries, inputs, loaded, storageError, notice, phase, startPrompt, endPrompt, navigation, shortcutFailures } = useSyncExternalStore(mainController.subscribe, mainController.snapshot);
   const activeMeetingId = mainController.activeMeeting?.id ?? null;
+  // As on macOS, the hint names the dictation key only while it is actually registered.
+  const hint = dictationHint(settings.shortcuts ?? {}, shortcutFailures);
   const [section, setSection] = useState<"notes" | "meetings" | "calendar" | "settings">("notes");
   const [selectedNoteId, setSelectedNoteId] = useState("today-placeholder");
   const [selectedMeetingId, setSelectedMeetingId] = useState<string>();
@@ -286,9 +289,9 @@ export default function App() {
               </>
             )}
           </button>
-          <small style={{ fontSize: 10.5, color: "var(--os-ink-muted)", textAlign: "center" }}>
-            {settings.shortcuts?.dictate?.display ?? "Ctrl Alt Space"} to dictate
-          </small>
+          {hint && <small style={{ fontSize: 10.5, color: "var(--os-ink-muted)", textAlign: "center" }}>
+            {hint} to dictate
+          </small>}
         </div>
       </aside>
 

@@ -1,5 +1,5 @@
 ﻿import { it, expect } from "vitest";
-import { parseAccelerator, defaultBindings, validateBindings, ShortcutInterpreter, shortcutActions } from "./shortcuts";
+import { parseAccelerator, defaultBindings, validateBindings, ShortcutInterpreter, shortcutActions, assignShortcut, dictationHint } from "./shortcuts";
 it("normalizes modifier aliases and display", () => {
   expect(parseAccelerator("shift+control+alt+v")).toEqual({accelerator:"Ctrl+Alt+Shift+V",display:"Ctrl Alt Shift V"});
   expect(parseAccelerator("CmdOrCtrl+Space").accelerator).toBe("Ctrl+Space");
@@ -30,4 +30,22 @@ it("push to talk handles release during startup and ignores unrelated releases",
   for (const action of shortcutActions.slice(2)) {
     expect(keys.handle(action,"pressed",0,false)).toEqual([action]); expect(keys.handle(action,"released",1,false)).toEqual([]);
   }
+});
+it("assigning a taken shortcut moves it, as on macOS, and removing clears only that action", () => {
+  const moved = assignShortcut(defaultBindings, "meeting", parseAccelerator("Ctrl+Alt+Space"));
+  expect(moved.displaced).toBe("dictate");
+  expect(moved.bindings.dictate).toBeUndefined();
+  expect(moved.bindings.meeting?.accelerator).toBe("Ctrl+Alt+Space");
+  expect(() => validateBindings(moved.bindings)).not.toThrow();
+  const fresh = assignShortcut(defaultBindings, "meeting", parseAccelerator("Ctrl+Shift+F9"));
+  expect(fresh.displaced).toBeUndefined();
+  const removed = assignShortcut(defaultBindings, "pasteLast", null);
+  expect(removed.bindings.pasteLast).toBeUndefined();
+  expect(removed.bindings.dictate).toEqual(defaultBindings.dictate);
+});
+it("the dictation hint falls back to push to talk and hides keys another app holds", () => {
+  expect(dictationHint(defaultBindings)).toBe("Ctrl Alt Space");
+  expect(dictationHint(defaultBindings, ["dictate"])).toBeNull();
+  expect(dictationHint({ holdToTalk: parseAccelerator("Ctrl+Alt+H") })).toBe("Ctrl Alt H");
+  expect(dictationHint({})).toBeNull();
 });
