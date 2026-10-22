@@ -98,6 +98,15 @@ describe("main window integration", () => {
     expect(calls("transcribe_recording")).toHaveLength(1); expect(app.state.recoveries).toHaveLength(0);
   });
 
+  it("saves the transcript when cleanup fails, as on macOS", async () => {
+    const original = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args) => command === "clean_transcript" ? Promise.reject("Add your writing provider key in Settings.") : original(command, args));
+    const app = new MainController(); await app.initialize(); await app.intent({ action: "dictate" }); await app.intent({ action: "dictate" });
+    expect(calls("add_capture")[0][1].capture.text).toBe("corrected text");
+    expect(app.state.recoveries).toHaveLength(0);
+    expect(app.state.notice).toBe("Transcript saved; cleanup unavailable: Add your writing provider key in Settings.");
+  });
+
   it("expands snippets without rewriting their content", async () => {
     const app = new MainController(); await app.initialize();
     await app.updateSettings({ ...app.state.settings, snippets: [{ id: "S", trigger: "corrected text", replacement: "Exact signature\nSecond line" }] });

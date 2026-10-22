@@ -50,8 +50,15 @@ export class MainController {
       const snippet = expandSnippet(result.text, settings.snippets);
       if (snippet) return snippet;
       if (!settings.cleanupEnabled) return result.text;
-      const cleaned = (await native.clean(result.text, settings, `${cleanupInstructions[settings.cleanupStrength]}\nUse a ${settings.writingTone} tone. Return only the revised text.`)).text;
-      if (!cleaned.trim()) throw new Error("The writing provider returned empty text. Your recording is saved for retry.");
+      let cleaned: string;
+      try {
+        cleaned = (await native.clean(result.text, settings, `${cleanupInstructions[settings.cleanupStrength]}\nUse a ${settings.writingTone} tone. Return only the revised text.`)).text;
+      } catch (error) {
+        // As on macOS, a cleanup failure keeps the transcript instead of holding the dictation back.
+        this.error(`Transcript saved; cleanup unavailable: ${String(error)}`);
+        return result.text;
+      }
+      if (!cleaned.trim()) return result.text;
       return expandSnippet(cleaned, settings.snippets) ?? cleaned;
     },
     save: async capture => {
