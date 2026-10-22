@@ -441,6 +441,59 @@ pub fn part_directory(base: &Path) -> PathBuf {
     base.join(Id::default().to_string())
 }
 
+/// Splits a dictation into pieces of at most `seconds`, like the macOS chunk store, so each
+/// provider request stays short. A recording that already fits is returned as-is; otherwise the
+/// pieces are written beside it as `<name>-part<N>.wav` and the caller removes them.
+pub fn split_wav(path: &Path, seconds: u32) -> Result<Vec<PathBuf>, String> {
+    let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
+    let spec = reader.spec();
+    let frames_per_part = u64::from(spec.sample_rate) * u64::from(seconds.max(1));
+    if spec.channels == 0
+        || spec.sample_format != hound::SampleFormat::Int
+        || u64::from(reader.duration()) <= frames_per_part
+    {
+        return Ok(vec![path.to_path_buf()]);
+    }
+    let per_part = (frames_per_part * u64::from(spec.channels)) as usize;
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("recording");
+    let mut parts: Vec<PathBuf> = Vec::new();
+    let mut writer: Option<hound::WavWriter<BufWriter<File>>> = None;
+    let mut written = 0;
+    let result = (|| {
+        for sample in reader.samples::<i32>() {
+            let sample = sample.map_err(|e| e.to_string())?;
+            if written % per_part == 0 {
+                if let Some(done) = writer.take() {
+                    done.finalize().map_err(|e| e.to_string())?;
+                }
+                let part = path.with_file_name(format!("{stem}-part{}.wav", parts.len() + 1));
+                writer = Some(hound::WavWriter::create(&part, spec).map_err(|e| e.to_string())?);
+                parts.push(part);
+            }
+            if let Some(w) = writer.as_mut() {
+                w.write_sample(sample).map_err(|e| e.to_string())?;
+            }
+            written += 1;
+        }
+        if let Some(done) = writer.take() {
+            done.finalize().map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(parts),
+        Err(error) => {
+            for part in &parts {
+                let _ = fs::remove_file(part);
+            }
+            Err(error)
+        }
+    }
+}
+
 /// Compact uploads in memory; preserve the original recording and use an anti-aliasing
 /// windowed-sinc filter for downsampling instead of dropping samples.
 pub fn upload_wav(path: &Path) -> Result<Vec<u8>, String> {
@@ -523,6 +576,45 @@ pub fn upload_wav(path: &Path) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dictation_splits_into_fifteen_second_pieces_without_losing_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("take.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..(100 * 2 * 32) {
+            writer.write_sample((i % 1000) as i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        let parts = split_wav(&path, 15).unwrap();
+        let lengths: Vec<u32> = parts
+            .iter()
+            .map(|p| hound::WavReader::open(p).unwrap().duration())
+            .collect();
+        assert_eq!(lengths, [1500, 1500, 200]);
+        let joined: Vec<i16> = parts
+            .iter()
+            .flat_map(|p| {
+                hound::WavReader::open(p)
+                    .unwrap()
+                    .samples::<i16>()
+                    .map(Result::unwrap)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let original: Vec<i16> = hound::WavReader::open(&path)
+            .unwrap()
+            .samples::<i16>()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(joined, original);
+        assert_eq!(split_wav(&path, 40).unwrap(), std::slice::from_ref(&path));
+    }
     #[test]
     fn meter_level_lets_speech_fill_the_flowbar() {
         assert_eq!(meter_level(&[]), 0.0);

@@ -35,12 +35,40 @@ pub static TRANSCRIPT_FILTER: std::sync::OnceLock<
 pub fn hints_for_settings(settings: &crate::storage::AppSettings) -> Option<SpeechHints> {
     SPEECH_HINT_FACTORY.get().map(|factory| factory(settings))
 }
+/// Matches the macOS recorder's chunk length.
+const DICTATION_CHUNK_SECONDS: u32 = 15;
+
+/// Dictation, as on macOS: 15-second pieces, each transcribed with retries, joined in order.
 pub async fn transcribe(
     path: &Path,
     config: &ProviderConfig,
     hints: Option<&SpeechHints>,
 ) -> Result<ProviderResult, String> {
-    transcribe_impl(path, config, hints, false).await
+    let source = path.to_owned();
+    let parts = tokio::task::spawn_blocking(move || {
+        crate::meeting_audio::split_wav(&source, DICTATION_CHUNK_SECONDS)
+    })
+    .await
+    .map_err(|_| "Could not prepare the audio upload.".to_string())??;
+    let mut texts = Vec::new();
+    let mut failure = None;
+    for part in &parts {
+        match transcribe_reliably(part, config, hints).await {
+            Ok(result) if !result.text.is_empty() => texts.push(result.text),
+            Ok(_) => {}
+            Err(error) => {
+                failure = Some(error);
+                break;
+            }
+        }
+    }
+    for part in parts.iter().filter(|part| part.as_path() != path) {
+        let _ = std::fs::remove_file(part);
+    }
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    transcription_result(&texts.join(" "), false)
 }
 async fn transcribe_impl(
     path: &Path,
