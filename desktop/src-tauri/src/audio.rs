@@ -280,7 +280,7 @@ where
             move |samples: &[T], _| {
                 let pcm: Vec<i16> = samples.iter().map(|s| (*s).to_i16()).collect();
                 if let Ok(mut meter) = level.lock() {
-                    *meter = crate::meeting_audio::rms(&pcm);
+                    *meter = crate::meeting_audio::meter_level(&pcm);
                 }
                 if let Ok(mut guard) = writer.lock() {
                     if let Some(writer) = guard.as_mut() {

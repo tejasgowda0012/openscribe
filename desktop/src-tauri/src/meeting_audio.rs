@@ -401,7 +401,7 @@ where
                     .map(|s| cpal::Sample::from_sample(*s))
                     .collect();
                 if let Ok(mut meter) = level.lock() {
-                    *meter = rms(&pcm);
+                    *meter = meter_level(&pcm);
                 }
                 if let Ok(mut w) = writer.lock() {
                     if let Err(e) = w.append_at(&pcm, timestamp) {
@@ -431,6 +431,11 @@ pub fn rms(samples: &[i16]) -> f32 {
         / samples.len() as f32)
         .sqrt()
         .clamp(0.0, 1.0)
+}
+
+/// The meter shown in the Flowbar: the macOS recorder's mapping, so ordinary speech fills the line.
+pub fn meter_level(samples: &[i16]) -> f32 {
+    ((rms(samples) - 0.003) * 18.0).clamp(0.0, 1.0)
 }
 pub fn part_directory(base: &Path) -> PathBuf {
     base.join(Id::default().to_string())
@@ -518,6 +523,14 @@ pub fn upload_wav(path: &Path) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn meter_level_lets_speech_fill_the_flowbar() {
+        assert_eq!(meter_level(&[]), 0.0);
+        assert_eq!(meter_level(&[50; 64]), 0.0); // Room noise stays flat.
+        let speech = meter_level(&[1600; 64]); // About 0.05 RMS, ordinary speech.
+        assert!(speech > 0.8 && speech <= 1.0, "{speech}");
+        assert_eq!(meter_level(&[i16::MAX; 64]), 1.0);
+    }
     #[test]
     fn timestamp_gaps_close_partial_chunks_on_the_meeting_timeline() {
         let dir = tempfile::tempdir().unwrap();

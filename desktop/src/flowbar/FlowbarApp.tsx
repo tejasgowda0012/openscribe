@@ -179,7 +179,7 @@ export const FlowbarApp: React.FC = () => {
         <FlowbarIconButton onClick={() => setScreenshotMenuOpen(!screenshotMenuOpen)} title="Screenshot"><Camera size={15} /></FlowbarIconButton>
       </>}
       {mode === "dictating" && <>
-        <FlowbarSquiggle width={42} height={16} level={level} motion={phase === "starting" ? "flowing" : "live"} />
+        <FlowbarIconButton onClick={() => send("dictate")} title="Listening. Click to finish, or press Escape to cancel."><FlowbarSquiggle width={42} height={18} level={level} motion={phase === "starting" ? "flowing" : "live"} /></FlowbarIconButton>
         <FlowbarIconButton color="var(--os-flowbar-recording)" onClick={() => send("dictate")} title="Stop and save"><Square size={13} fill="currentColor" /></FlowbarIconButton>
       </>}
       {(mode === "processing" || mode === "meetingSaving") && <FlowbarSquiggle width={64} height={16} motion="flowing" color="var(--os-flowbar-accent)" />}
