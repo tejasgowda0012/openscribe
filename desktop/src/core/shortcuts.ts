@@ -15,7 +15,22 @@ export function parseAccelerator(value: string): ShortcutBinding {
   const ordered = ["Ctrl","Alt","Shift"].filter(s => modifiers.includes(s));
   const accelerator = [...ordered, keys[0]].join("+");
   if (["Alt+F4","Ctrl+Alt+Delete","Alt+Tab","Ctrl+Escape","Ctrl+Shift+Escape","Alt+Space"].includes(accelerator)) throw new Error("This shortcut is reserved by Windows.");
-  return { accelerator, display: [...ordered, keys[0]].join(" ") };
+  return { accelerator, display: [...ordered, keyLabels[keys[0]] ?? keys[0]].join(" ") };
+}
+const keyLabels: Record<string, string> = { Comma: ",", Period: ".", Slash: "/", Backslash: "\\", Semicolon: ";", Quote: "'", Backquote: "`", BracketLeft: "[", BracketRight: "]", Minus: "-", Equal: "=", ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→" };
+export interface RecordedKey { key: string; code: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }
+/**
+ * Reads a key press in the shortcut recorder; a modifier on its own waits for the key.
+ * Uses the physical key, as global registration does, so punctuation and other layouts record.
+ */
+export function bindingFromKey(event: RecordedKey): ShortcutBinding | null {
+  if (["Control", "Alt", "Shift", "Meta", "AltGraph", "OS"].includes(event.key)) return null;
+  const code = event.code;
+  const key = code.startsWith("Key") ? code.slice(3) : code.startsWith("Digit") ? code.slice(5) : code || (event.key === " " ? "Space" : event.key);
+  const binding = parseAccelerator([event.ctrlKey && "Ctrl", event.altKey && "Alt", event.shiftKey && "Shift", event.metaKey && "Super", key].filter(Boolean).join("+"));
+  // A global Shift shortcut would take that key from typing and selection in every app.
+  if (event.shiftKey && !event.ctrlKey && !event.altKey && !/^F\d+$/.test(key)) throw new Error("Add Ctrl or Alt. Shift alone would take this key from typing in every app.");
+  return binding;
 }
 /** Right Ctrl on its own: Windows' counterpart to the macOS Globe key, for dictation only. */
 export const rightCtrlBinding: ShortcutBinding = { accelerator: "RightCtrl", display: "Right Ctrl" };

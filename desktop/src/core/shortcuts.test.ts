@@ -1,5 +1,5 @@
 ﻿import { it, expect } from "vitest";
-import { parseAccelerator, defaultBindings, validateBindings, ShortcutInterpreter, shortcutActions, assignShortcut, dictationHint, rightCtrlBinding } from "./shortcuts";
+import { parseAccelerator, defaultBindings, validateBindings, ShortcutInterpreter, shortcutActions, assignShortcut, dictationHint, rightCtrlBinding, bindingFromKey } from "./shortcuts";
 it("normalizes modifier aliases and display", () => {
   expect(parseAccelerator("shift+control+alt+v")).toEqual({accelerator:"Ctrl+Alt+Shift+V",display:"Ctrl Alt Shift V"});
   expect(parseAccelerator("CmdOrCtrl+Space").accelerator).toBe("Ctrl+Space");
@@ -64,4 +64,17 @@ it("Right Ctrl alone is for dictation only, and a Ctrl combination cancels only 
   expect(keys.handle("dictate","cancelled",950,false)).toEqual([]);
   expect(keys.handle("holdToTalk","pressed",2000,false)).toEqual(["startDictation"]);
   expect(keys.handle("holdToTalk","released",2600,true)).toEqual(["finishDictation"]);
+});
+it("records physical keys, including punctuation, and refuses Shift alone on typing keys", () => {
+  const press = (code: string, key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }> = {}) =>
+    bindingFromKey({ code, key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...mods });
+  expect(press("Comma", ",", { ctrlKey: true, altKey: true })).toEqual({ accelerator: "Ctrl+Alt+Comma", display: "Ctrl Alt ," });
+  expect(press("Slash", "?", { ctrlKey: true, shiftKey: true })).toEqual({ accelerator: "Ctrl+Shift+Slash", display: "Ctrl Shift /" });
+  expect(press("KeyQ", "a", { altKey: true })?.accelerator).toBe("Alt+Q");
+  expect(press("Space", " ", { ctrlKey: true })?.accelerator).toBe("Ctrl+Space");
+  expect(press("ControlRight", "Control", { ctrlKey: true })).toBeNull();
+  expect(() => press("KeyA", "A", { shiftKey: true })).toThrow(/Ctrl or Alt/);
+  expect(() => press("ArrowUp", "ArrowUp", { shiftKey: true })).toThrow(/Ctrl or Alt/);
+  expect(press("F9", "F9", { shiftKey: true })?.accelerator).toBe("Shift+F9");
+  expect(() => press("KeyA", "a")).toThrow();
 });

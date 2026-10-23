@@ -39,6 +39,7 @@ pub fn hints_for_settings(settings: &crate::storage::AppSettings) -> Option<Spee
 const DICTATION_CHUNK_SECONDS: u32 = 15;
 
 /// Dictation, as on macOS: 15-second pieces, each transcribed with retries, joined in order.
+/// Speech from a quiet microphone is brought up to a clear level first.
 pub async fn transcribe(
     path: &Path,
     config: &ProviderConfig,
@@ -46,7 +47,9 @@ pub async fn transcribe(
 ) -> Result<ProviderResult, String> {
     let source = path.to_owned();
     let parts = tokio::task::spawn_blocking(move || {
-        crate::meeting_audio::split_wav(&source, DICTATION_CHUNK_SECONDS)
+        // Quiet microphones lose whole phrases at the provider, so speech is lifted first.
+        let gain = crate::meeting_audio::speech_gain(&source).unwrap_or(1.0);
+        crate::meeting_audio::split_wav_with_gain(&source, DICTATION_CHUNK_SECONDS, gain)
     })
     .await
     .map_err(|_| "Could not prepare the audio upload.".to_string())??;

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 import { AlertTriangle, MoreHorizontal } from "lucide-react";
 import type { ParitySettings, ShortcutAction, ShortcutBinding } from "../../api/parityTypes";
-import { assignShortcut, defaultBindings, holdsKey, parseAccelerator, rightCtrlBinding, shortcutTitles } from "../../core/shortcuts";
+import { assignShortcut, bindingFromKey, defaultBindings, holdsKey, rightCtrlBinding, shortcutTitles } from "../../core/shortcuts";
 import { mainController } from "../../mainController";
 import { reportUiError } from "../../workspaceEvents";
 
@@ -26,13 +26,6 @@ const GROUPS: { title: string; footer: string; actions: ShortcutAction[] }[] = [
 ];
 
 const secondaryButton: React.CSSProperties = { background: "var(--os-surface)", color: "var(--os-ink)", border: "1px solid var(--os-line)", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 500, cursor: "pointer" };
-
-/** Reads a key press as an accelerator; modifier-only presses wait for the key. */
-function bindingFromEvent(event: KeyboardEvent): ShortcutBinding | null {
-  if (["Control", "Alt", "Shift", "Meta", "AltGraph"].includes(event.key)) return null;
-  const key = event.key === " " ? "Space" : event.code.startsWith("Key") ? event.code.slice(3) : event.code.startsWith("Digit") ? event.code.slice(5) : event.key;
-  return parseAccelerator([event.ctrlKey && "Ctrl", event.altKey && "Alt", event.shiftKey && "Shift", event.metaKey && "Super", key].filter(Boolean).join("+"));
-}
 
 function Keycaps({ display, dimmed }: { display: string; dimmed: boolean }) {
   return <span style={{ display: "inline-flex", gap: 4, opacity: dimmed ? 0.45 : 1 }}>
@@ -69,7 +62,7 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({ settings, 
       event.preventDefault(); event.stopPropagation();
       if (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.shiftKey) { setRecordingAction(null); setRecordError(""); return; }
       try {
-        const binding = bindingFromEvent(event);
+        const binding = bindingFromKey(event);
         if (binding) assign(recordingAction, binding);
       } catch (error) { setRecordError(error instanceof Error ? error.message : String(error)); }
     };

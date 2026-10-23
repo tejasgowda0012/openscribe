@@ -445,15 +445,78 @@ pub fn part_directory(base: &Path) -> PathBuf {
 /// provider request stays short. A recording that already fits is returned as-is; otherwise the
 /// pieces are written beside it as `<name>-part<N>.wav` and the caller removes them.
 pub fn split_wav(path: &Path, seconds: u32) -> Result<Vec<PathBuf>, String> {
+    split_wav_with_gain(path, seconds, 1.0)
+}
+
+/// Speech peaks are lifted toward this level (about −6 dBFS).
+const SPEECH_TARGET: f64 = 0.5;
+/// At most +20 dB, so a quiet laptop array becomes clear speech without room noise becoming loud.
+const MAX_SPEECH_GAIN: f64 = 10.0;
+/// Below about −48 dBFS a take holds no speech worth lifting; amplifying it invites invented text.
+const SILENCE_LEVEL: f64 = 0.004;
+
+/// The gain that brings a quiet dictation's speech up to a level providers transcribe reliably.
+/// Built-in Windows microphone arrays often deliver speech near −30 dBFS, where transcription
+/// drops whole phrases. Never turns audio down.
+pub fn speech_gain(path: &Path) -> Result<f64, String> {
+    let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
+    let spec = reader.spec();
+    if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample == 0 {
+        return Ok(1.0);
+    }
+    let scale = 2.0_f64.powi(i32::from(spec.bits_per_sample) - 1);
+    const BINS: usize = 2048;
+    let mut histogram = vec![0_u64; BINS];
+    let mut total = 0_u64;
+    for sample in reader.samples::<i32>() {
+        let level = (f64::from(sample.map_err(|e| e.to_string())?).abs() / scale).min(1.0);
+        histogram[((level * (BINS - 1) as f64) as usize).min(BINS - 1)] += 1;
+        total += 1;
+    }
+    if total == 0 {
+        return Ok(1.0);
+    }
+    // The 99.9th percentile follows speech peaks while ignoring the odd click or bump.
+    let threshold = total - total / 1000;
+    let mut seen = 0;
+    let mut peak = 1.0;
+    for (bin, count) in histogram.iter().enumerate() {
+        seen += count;
+        if seen >= threshold {
+            peak = (bin + 1) as f64 / BINS as f64;
+            break;
+        }
+    }
+    if peak < SILENCE_LEVEL {
+        return Ok(1.0);
+    }
+    Ok((SPEECH_TARGET / peak).clamp(1.0, MAX_SPEECH_GAIN))
+}
+
+/// Applies gain, rounding off anything near full scale instead of clipping it.
+fn lift(sample: f64, gain: f64) -> f64 {
+    let value = sample * gain;
+    let knee = 0.9;
+    if value.abs() <= knee {
+        return value;
+    }
+    value.signum() * (knee + (1.0 - knee) * ((value.abs() - knee) / (1.0 - knee)).tanh())
+}
+
+/// As [`split_wav`], with `gain` applied to every piece. The original recording is never changed,
+/// so a lifted take is always written as pieces even when it fits in one.
+pub fn split_wav_with_gain(path: &Path, seconds: u32, gain: f64) -> Result<Vec<PathBuf>, String> {
     let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
     let spec = reader.spec();
     let frames_per_part = u64::from(spec.sample_rate) * u64::from(seconds.max(1));
+    let lifted = gain > 1.001;
     if spec.channels == 0
         || spec.sample_format != hound::SampleFormat::Int
-        || u64::from(reader.duration()) <= frames_per_part
+        || (!lifted && u64::from(reader.duration()) <= frames_per_part)
     {
         return Ok(vec![path.to_path_buf()]);
     }
+    let scale = 2.0_f64.powi(i32::from(spec.bits_per_sample) - 1);
     let per_part = (frames_per_part * u64::from(spec.channels)) as usize;
     let stem = path
         .file_stem()
@@ -473,6 +536,11 @@ pub fn split_wav(path: &Path, seconds: u32) -> Result<Vec<PathBuf>, String> {
                 writer = Some(hound::WavWriter::create(&part, spec).map_err(|e| e.to_string())?);
                 parts.push(part);
             }
+            let sample = if lifted {
+                (lift(f64::from(sample) / scale, gain) * (scale - 1.0)).round() as i32
+            } else {
+                sample
+            };
             if let Some(w) = writer.as_mut() {
                 w.write_sample(sample).map_err(|e| e.to_string())?;
             }
@@ -614,6 +682,56 @@ mod tests {
             .collect();
         assert_eq!(joined, original);
         assert_eq!(split_wav(&path, 40).unwrap(), std::slice::from_ref(&path));
+    }
+    fn tone(path: &Path, amplitude: f64, seconds: u32) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 1000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(path, spec).unwrap();
+        for i in 0..(1000 * seconds) {
+            let value = (f64::from(i) * 0.3).sin() * amplitude * 32767.0;
+            writer.write_sample(value as i16).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+    fn peak(path: &Path) -> f64 {
+        hound::WavReader::open(path)
+            .unwrap()
+            .samples::<i16>()
+            .map(|s| f64::from(s.unwrap()).abs() / 32767.0)
+            .fold(0.0, f64::max)
+    }
+    #[test]
+    fn quiet_dictation_is_lifted_without_touching_the_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let quiet = dir.path().join("quiet.wav");
+        tone(&quiet, 0.037, 3); // The level a Windows laptop array delivered in testing.
+        let gain = speech_gain(&quiet).unwrap();
+        assert!(gain > 9.9 && gain <= MAX_SPEECH_GAIN, "{gain}");
+        let parts = split_wav_with_gain(&quiet, 15, gain).unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_ne!(parts[0], quiet, "the original is kept as recorded");
+        assert!((peak(&quiet) - 0.037).abs() < 0.001);
+        assert!((peak(&parts[0]) - 0.37).abs() < 0.01, "{}", peak(&parts[0]));
+
+        let loud = dir.path().join("loud.wav");
+        tone(&loud, 0.8, 3);
+        assert_eq!(speech_gain(&loud).unwrap(), 1.0, "never turned down");
+        assert_eq!(split_wav_with_gain(&loud, 15, 1.0).unwrap(), [loud]);
+
+        let silent = dir.path().join("silent.wav");
+        tone(&silent, 0.002, 3);
+        assert_eq!(speech_gain(&silent).unwrap(), 1.0, "silence is not amplified");
+    }
+    #[test]
+    fn lifting_rounds_off_peaks_instead_of_clipping() {
+        assert_eq!(lift(0.05, 10.0), 0.5);
+        let high = lift(0.2, 10.0);
+        assert!(high > 0.9 && high < 1.0, "{high}");
+        assert!(lift(-0.2, 10.0) < -0.9);
     }
     #[test]
     fn meter_level_lets_speech_fill_the_flowbar() {
