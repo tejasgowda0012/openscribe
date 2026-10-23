@@ -17,39 +17,58 @@ export function parseAccelerator(value: string): ShortcutBinding {
   if (["Alt+F4","Ctrl+Alt+Delete","Alt+Tab","Ctrl+Escape","Ctrl+Shift+Escape","Alt+Space"].includes(accelerator)) throw new Error("This shortcut is reserved by Windows.");
   return { accelerator, display: [...ordered, keys[0]].join(" ") };
 }
+/** Right Ctrl on its own: Windows' counterpart to the macOS Globe key, for dictation only. */
+export const rightCtrlBinding: ShortcutBinding = { accelerator: "RightCtrl", display: "Right Ctrl" };
+export const holdsKey = (action: ShortcutAction) => action === "dictate" || action === "holdToTalk";
 export function validateBindings(bindings: ShortcutBindings): void {
   const seen = new Set<string>();
   for (const [action,binding] of Object.entries(bindings)) {
     if (!shortcutActions.includes(action as ShortcutAction)) throw new Error("Unknown shortcut action.");
+    if (binding.accelerator === rightCtrlBinding.accelerator) {
+      if (!holdsKey(action as ShortcutAction)) throw new Error("Right Ctrl on its own can only be used for dictation.");
+      if (seen.has(binding.accelerator)) throw new Error("Two actions use the same shortcut.");
+      seen.add(binding.accelerator); continue;
+    }
     const { accelerator } = parseAccelerator(binding.accelerator);
     if (seen.has(accelerator)) throw new Error("Two actions use the same shortcut.");
     seen.add(accelerator);
   }
 }
 export const defaultBindings: ShortcutBindings = Object.fromEntries(Object.entries({ dictate: "Ctrl+Alt+Space", holdToTalk: "Ctrl+Alt+H", meeting: "Ctrl+Alt+M", screenshotArea: "Ctrl+Alt+4", screenshotWindow: "Ctrl+Alt+5", screenshotScreen: "Ctrl+Alt+3", pasteLast: "Ctrl+Alt+V" }).map(([action,key]) => [action, parseAccelerator(key)]));
-export type ShortcutIntent = "startDictation" | "finishDictation" | Exclude<ShortcutAction,"dictate" | "holdToTalk">;
+export type ShortcutIntent = "startDictation" | "finishDictation" | "cancelDictation" | Exclude<ShortcutAction,"dictate" | "holdToTalk">;
 /** Mirrors AppController's 350 ms tap/hold threshold. The caller includes pending startup in recording. */
 export class ShortcutInterpreter {
   private down = new Set<ShortcutAction>();
   private dictatePressedAt?: number;
-  handle(action: ShortcutAction, state: "pressed" | "released", now: number, recording: boolean, busy = false): ShortcutIntent[] {
+  /** The held key whose press started the current dictation. */
+  private startedBy?: ShortcutAction;
+  handle(action: ShortcutAction, state: "pressed" | "released" | "cancelled", now: number, recording: boolean, busy = false): ShortcutIntent[] {
     if (state === "pressed") {
       if (this.down.has(action)) return [];
       this.down.add(action);
       if (action === "dictate") {
         if (recording) { this.dictatePressedAt = undefined; return ["finishDictation"]; }
         if (busy) return [];
-        this.dictatePressedAt = now; return ["startDictation"];
+        this.dictatePressedAt = now; this.startedBy = action; return ["startDictation"];
       }
-      return action === "holdToTalk" ? (busy || recording ? [] : ["startDictation"]) : [action];
+      if (action !== "holdToTalk") return [action];
+      if (busy || recording) return [];
+      this.startedBy = action; return ["startDictation"];
     }
     if (!this.down.delete(action)) return [];
+    // Right Ctrl joined by another key was a Ctrl shortcut: drop the dictation it just started.
+    if (state === "cancelled") {
+      const started = this.startedBy === action; this.startedBy = undefined;
+      if (action === "dictate") this.dictatePressedAt = undefined;
+      return started ? ["cancelDictation"] : [];
+    }
+    if (this.startedBy === action) this.startedBy = undefined;
     if (action === "holdToTalk") return ["finishDictation"];
     if (action !== "dictate") return [];
     const pressed = this.dictatePressedAt; this.dictatePressedAt = undefined;
     return pressed != null && now-pressed >= 350 ? ["finishDictation"] : [];
   }
-  reset() { this.down.clear(); this.dictatePressedAt = undefined; }
+  reset() { this.down.clear(); this.dictatePressedAt = undefined; this.startedBy = undefined; }
 }
 export const shortcutTitles: Record<ShortcutAction, string> = { dictate: "Dictate", holdToTalk: "Push to talk", meeting: "Start or stop a meeting", screenshotArea: "Screenshot an area", screenshotWindow: "Screenshot a window", screenshotScreen: "Screenshot the screen", pasteLast: "Paste last dictation" };
 /** As on macOS, assigning a shortcut takes it from any other action so one press never does two things. */

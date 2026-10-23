@@ -19,7 +19,8 @@ export interface MainState {
   settings: ParitySettings; notes: VoiceNote[]; meetings: MeetingRecord[]; recoveries: DictationJob[];
   calendarEvents: CalendarEvent[]; inputs: AudioInput[]; phase: DictationPhase; loaded: boolean;
   storageError: string | null; notice: string | null; startPrompt: CalendarPrompt | null; endPrompt: CalendarPrompt | null;
-  navigation?: { section: "notes" | "meetings" | "settings"; meetingId?: string };
+  navigation?: { section: "notes" | "meetings" | "settings"; meetingId?: string; noteId?: string; settingsSection?: import("./views/settings/SettingsView").SettingsSection };
+  noticeDetails?: boolean;
   /** Actions whose shortcut another app holds, as macOS reports them. */
   shortcutFailures: ShortcutAction[];
 }
@@ -41,6 +42,9 @@ export class MainController {
   private escapeActive = false;
   readonly dictation = new DictationController({
     settings: () => this.state.settings,
+    sourceApp: native.foregroundApp,
+    cancelProcessing: native.cancelDictationWork,
+    success: message => this.confirm(message),
     start: async device => { await this.busyUpdate; return native.startRecording(device); },
     stop: native.stopRecording,
     // Native builds the complete provider hints from the persisted profile.
@@ -57,6 +61,7 @@ export class MainController {
       try {
         cleaned = (await native.clean(result.text, settings, `${cleanupInstructions[settings.cleanupStrength]}\nUse a ${settings.writingTone} tone. Return only the revised text.`)).text;
       } catch (error) {
+        if (String(error).toLowerCase().includes("cancelled")) throw error;
         // As on macOS, a cleanup failure keeps the transcript instead of holding the dictation back.
         this.error(`Transcript saved; cleanup unavailable: ${String(error)}`);
         return result.text;
@@ -74,7 +79,7 @@ export class MainController {
       // Serialize transitions so an older idle update cannot overtake a new start.
       this.busyUpdate = this.busyUpdate.catch(() => undefined).then(() => native.setDictationBusy(phase !== "idle"));
       void this.busyUpdate.catch(this.error);
-      const escape = phase === "starting" || phase === "recording";
+      const escape = phase !== "idle";
       if (escape !== this.escapeActive) { this.escapeActive = escape; void api.setEscapeActive(escape).catch(this.error); }
     },
     error: error => this.error(error)
@@ -92,6 +97,8 @@ export class MainController {
   } satisfies WorkspaceStatus);
   error = (error: unknown) => { this.patch({ notice: String(error) }); };
   clearNotice = () => this.patch({ notice: null });
+  closeNoticeDetails = () => this.patch({ noticeDetails: false });
+  private confirm(message: string) { void emit("workspace://confirmation", { message, id: crypto.randomUUID() }).catch(console.error); }
   clearStorageError = () => this.patch({ storageError: null });
   initialize() {
     return this.initialization ??= this.initializeOnce();
@@ -119,18 +126,39 @@ export class MainController {
       for (const intent of this.interpreter.handle(action as ShortcutAction, state, performance.now(), phase === "starting" || phase === "recording", phase !== "idle" || !!this.activeMeeting || this.meetingTransition)) {
         if (intent === "startDictation") void this.startDictation();
         else if (intent === "finishDictation") void this.dictation.finish();
+        else if (intent === "cancelDictation") void this.dictation.finish(true);
         else if (intent.startsWith("screenshot")) void this.intent({ action: "screenshot", kind: intent.slice(10).toLowerCase() as "area" | "window" | "screen" });
         else void this.intent({ action: intent as "meeting" | "pasteLast" });
       }
     }));
     add(api.parityEvents.onShortcutEscape(() => {
-      if (this.dictation.phase === "starting" || this.dictation.phase === "recording") void this.dictation.finish(true);
+      if (this.dictation.phase !== "idle") void this.dictation.finish(true);
     }));
     add(listen<WorkspaceIntent>("workspace://intent", event => { void this.intent(event.payload).catch(this.error); }));
     add(listen("workspace://request-state", () => { void this.publish().catch(this.error); }));
     add(listen<string>("workspace://error", event => this.error(event.payload)));
     add(listen("workspace://refresh-notes", () => { void this.refreshNotes().catch(this.error); }));
     add(listen("workspace://refresh-meetings", () => { void this.refreshMeetings().catch(this.error); }));
+    add(listen<{ requestId: string; heard: string; replacement: string }>("workspace://teach-correction", event => {
+      const { requestId, heard, replacement } = event.payload;
+      void (async () => {
+        try {
+          if (!heard.trim() || !replacement.trim()) throw new Error("Enter both phrases.");
+          await this.updateSettings({ ...this.state.settings, correctionRules: [...this.state.settings.correctionRules.filter(rule => rule.heard.toLowerCase() !== heard.trim().toLowerCase()), { id: crypto.randomUUID(), heard: heard.trim(), replacement: replacement.trim() }] });
+          await emit("workspace://correction-result", { requestId });
+          this.confirm("Correction saved");
+        } catch (error) { await emit("workspace://correction-result", { requestId, error: String(error) }); this.error(error); }
+      })();
+    }));
+    add(listen<{ meetingId: string; createdAt: number }>("workspace://open-day", event => {
+      const { meetingId, createdAt } = event.payload;
+      const day = new Date((createdAt + 978307200) * 1000).toLocaleDateString();
+      const note = this.state.notes.find(note => note.captures?.some(capture => capture.meetingID === meetingId))
+        ?? this.state.notes.find(note => note.captures != null && new Date(note.createdAt).toLocaleDateString() === day);
+      const date = new Date((createdAt + 978307200) * 1000);
+      const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      this.patch({ navigation: { section: "notes", noteId: note?.id ?? `day:${dateKey}` } });
+    }));
     // Load all durable state before capture actions become available.
     const results = await Promise.allSettled([
       api.loadProfile().then(profile => this.patch({ settings: normalizeSettings(profile.settings), notes: profile.notes, storageError: profile.storageError ?? null })),
@@ -211,6 +239,7 @@ export class MainController {
         const text = pasteLastText(this.state.notes);
         if (!text) throw new Error("There is no saved text to paste yet.");
         await native.paste(text);
+        this.confirm("Pasted");
       } else if (intent.action === "meeting") {
         if (this.meetingTransition) return;
         if (this.dictation.phase !== "idle") throw new Error("Finish dictation before starting a meeting.");
@@ -233,9 +262,16 @@ export class MainController {
       } else if (intent.action === "screenshot") {
         const capture = await api.takeScreenshot(intent.kind);
         // The backend already saved it. Never call add_capture a second time.
-        if (capture) { await this.refreshNotes(); await emit("workspace://screenshot", capture); }
+        if (capture) { await this.refreshNotes(); await emit("workspace://screenshot", capture); this.confirm("Screenshot saved"); }
       } else if (intent.action === "placement") await this.updateSettings({ ...this.state.settings, flowbarPlacement: intent.placement });
-      else if (intent.action === "open") {
+      else if (intent.action === "updatePreference") {
+        if (intent.key === "showOverlayWhenIdle" && typeof intent.value === "boolean") await this.updateSettings({ ...this.state.settings, showOverlayWhenIdle: intent.value });
+        else if (intent.key === "overlayPosition" && typeof intent.value === "string" && ["bottom-center", "bottom-left", "bottom-right", "top-center", "top-right"].includes(intent.value)) await this.updateSettings({ ...this.state.settings, overlayPosition: intent.value, flowbarPlacement: null });
+      } else if (intent.action === "inspectNotice" || intent.action === "settings") {
+        if (intent.action === "inspectNotice") this.patch({ noticeDetails: true });
+        else this.patch({ navigation: { section: "settings", settingsSection: intent.section } });
+        const main = await Window.getByLabel("main"); await main?.show(); await main?.setFocus();
+      } else if (intent.action === "open") {
         this.patch({ navigation: { section: intent.section ?? "notes", meetingId: intent.meetingId } });
         const main = await Window.getByLabel("main"); await main?.show(); await main?.setFocus();
       }

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 import { AlertTriangle, MoreHorizontal } from "lucide-react";
 import type { ParitySettings, ShortcutAction, ShortcutBinding } from "../../api/parityTypes";
-import { assignShortcut, defaultBindings, parseAccelerator, shortcutTitles } from "../../core/shortcuts";
+import { assignShortcut, defaultBindings, holdsKey, parseAccelerator, rightCtrlBinding, shortcutTitles } from "../../core/shortcuts";
 import { mainController } from "../../mainController";
 import { reportUiError } from "../../workspaceEvents";
 
@@ -36,7 +36,7 @@ function bindingFromEvent(event: KeyboardEvent): ShortcutBinding | null {
 
 function Keycaps({ display, dimmed }: { display: string; dimmed: boolean }) {
   return <span style={{ display: "inline-flex", gap: 4, opacity: dimmed ? 0.45 : 1 }}>
-    {display.split(" ").map((key, index) => <kbd key={index} style={{ background: "var(--os-surface-muted)", border: "1px solid var(--os-line)", borderRadius: 5, padding: "2px 7px", fontFamily: "inherit", fontSize: 12, fontWeight: 600, color: "var(--os-ink)" }}>{key}</kbd>)}
+    {(display === rightCtrlBinding.display ? [display] : display.split(" ")).map((key, index) => <kbd key={index} style={{ background: "var(--os-surface-muted)", border: "1px solid var(--os-line)", borderRadius: 5, padding: "2px 7px", fontFamily: "inherit", fontSize: 12, fontWeight: 600, color: "var(--os-ink)" }}>{key}</kbd>)}
   </span>;
 }
 
@@ -118,6 +118,8 @@ export const ShortcutsSettings: React.FC<ShortcutsSettingsProps> = ({ settings, 
           </button>
           {menuAction === action && <div role="menu" style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 20, minWidth: 200, background: "var(--os-surface)",
             border: "1px solid var(--os-line)", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.18)", padding: 4, display: "flex", flexDirection: "column" }}>
+            {holdsKey(action) && <button role="menuitem" style={{ textAlign: "left", background: "transparent", border: "none", padding: "6px 10px", fontSize: 12.5, cursor: "pointer", color: "var(--os-ink)", borderRadius: 5 }}
+              title="Hold Right Ctrl on its own. It still works as Ctrl with other keys." onClick={() => assign(action, rightCtrlBinding)}>Use Right Ctrl</button>}
             {fallback && <button role="menuitem" className="shortcut-menu-item" style={{ textAlign: "left", background: "transparent", border: "none", padding: "6px 10px", fontSize: 12.5, cursor: "pointer", color: "var(--os-ink)", borderRadius: 5 }}
               onClick={() => assign(action, fallback)}>Use default ({fallback.display})</button>}
             <button role="menuitem" disabled={!binding} style={{ textAlign: "left", background: "transparent", border: "none", padding: "6px 10px", fontSize: 12.5, cursor: binding ? "pointer" : "default", color: binding ? "var(--os-recording)" : "var(--os-ink-muted)", borderRadius: 5 }}

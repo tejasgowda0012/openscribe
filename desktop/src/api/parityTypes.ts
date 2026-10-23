@@ -155,6 +155,7 @@ export interface CalendarEvent {
 }
 
 export interface ParitySettings {
+  hasCompletedSetup?: boolean;
   speechProvider: string;
   speechBaseURL: string;
   speechModel: string;

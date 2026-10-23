@@ -6,6 +6,19 @@ pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
         .text("workspace", "Open OpenScribe")
         .text("flowbar", "Show Flowbar")
         .separator()
+        .text("dictate", "Start / finish dictation")
+        .text("cancelDictation", "Cancel dictation")
+        .text("meeting", "Start / finish meeting")
+        .text("pauseMeeting", "Pause / resume meeting")
+        .text("pasteLast", "Paste last text")
+        .separator()
+        .text("area", "Capture area")
+        .text("window", "Capture window")
+        .text("screen", "Capture screen")
+        .separator()
+        .text("settings", "Settings…")
+        .text("shortcuts", "Edit shortcuts…")
+        .separator()
         .text("quit", "Quit OpenScribe")
         .build()?;
     let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
@@ -56,6 +69,32 @@ pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
                 } else {
                     app.exit(0);
                 }
+            }
+            "dictate" | "cancelDictation" | "meeting" | "pauseMeeting" | "pasteLast" => {
+                let _ = app.emit_to(
+                    "main",
+                    "workspace://intent",
+                    serde_json::json!({"action": event.id().as_ref()}),
+                );
+            }
+            "area" | "window" | "screen" => {
+                let _ = app.emit_to(
+                    "main",
+                    "workspace://intent",
+                    serde_json::json!({"action":"screenshot", "kind":event.id().as_ref()}),
+                );
+            }
+            "settings" | "shortcuts" => {
+                let section = if event.id().as_ref() == "shortcuts" {
+                    "shortcuts"
+                } else {
+                    "general"
+                };
+                let _ = app.emit_to(
+                    "main",
+                    "workspace://intent",
+                    serde_json::json!({"action":"settings", "section":section}),
+                );
             }
             _ => {}
         })

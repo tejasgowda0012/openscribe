@@ -3,6 +3,9 @@ import type { FlowbarPlacement, MeetingRecord, ParitySettings } from "./api/pari
 import type { DictationPhase } from "./dictation";
 
 export type WorkspaceIntent =
+  | { action: "settings"; section: "general" | "providers" | "shortcuts" | "personalize" | "calendar" | "privacy" | "permissions" }
+  | { action: "inspectNotice" }
+  | { action: "updatePreference"; key: "overlayPosition" | "showOverlayWhenIdle"; value: string | boolean }
   | { action: "dictate" | "cancelDictation" | "meeting" | "pauseMeeting" | "pasteLast" | "dismissNotice" }
   | { action: "screenshot"; kind: "area" | "window" | "screen" }
   | { action: "placement"; placement: FlowbarPlacement }

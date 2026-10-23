@@ -47,6 +47,25 @@ beforeEach(() => {
 });
 
 describe("main window integration", () => {
+  it("acknowledges a taught correction only after settings persist, and reports save failure", async () => {
+    const app = new MainController(); await app.initialize();
+    fire("workspace://teach-correction", { requestId: "one", heard: "open scribe", replacement: "OpenScribe" });
+    await settle();
+    expect(app.state.settings.correctionRules).toContainEqual(expect.objectContaining({ heard: "open scribe", replacement: "OpenScribe" }));
+    expect(mocks.emit).toHaveBeenCalledWith("workspace://correction-result", { requestId: "one" });
+    const original = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args) => command === "save_settings" ? Promise.reject("Disk full") : original(command, args));
+    fire("workspace://teach-correction", { requestId: "two", heard: "new", replacement: "New" }); await settle();
+    expect(mocks.emit).toHaveBeenCalledWith("workspace://correction-result", { requestId: "two", error: "Disk full" });
+    expect(app.state.settings.correctionRules).not.toContainEqual(expect.objectContaining({ heard: "new" }));
+  });
+  it("routes Flowbar settings and notice details into the workspace", async () => {
+    const app = new MainController(); await app.initialize();
+    await app.intent({ action: "settings", section: "shortcuts" });
+    expect(app.state.navigation).toEqual({ section: "settings", settingsSection: "shortcuts" });
+    app.error("Provider failed"); await app.intent({ action: "inspectNotice" });
+    expect(app.state.noticeDetails).toBe(true); expect(app.state.notice).toBe("Provider failed");
+  });
   it("registers all seven Windows defaults, once, and preserves explicitly unbound settings", async () => {
     expect(normalizeSettings({}).shortcuts).toEqual(defaultBindings);
     expect(normalizeSettings({ shortcuts: {} }).shortcuts).toEqual({});

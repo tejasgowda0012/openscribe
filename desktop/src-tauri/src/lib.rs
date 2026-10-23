@@ -4,11 +4,13 @@ pub mod apple_time;
 mod audio;
 pub mod calendar;
 mod credentials;
+mod desktop_integration;
 pub mod dictionary;
 pub mod integration;
 pub mod meeting_audio;
 pub mod meetings;
 mod migrate;
+mod modifier_hold;
 pub mod notes;
 pub mod ocr;
 mod platform;
@@ -125,7 +127,13 @@ async fn transcribe_recording(
             )))
         })?,
     };
-    provider::transcribe(&PathBuf::from(path), &config, hints.as_ref()).await
+    let state = app.state::<integration::ActivityState>();
+    let generation = state.generation();
+    let path = PathBuf::from(path);
+    tokio::select! {
+        result = provider::transcribe(&path, &config, hints.as_ref()) => result,
+        () = state.cancelled(generation) => Err("Dictation cancelled.".into()),
+    }
 }
 
 #[tauri::command]
@@ -136,7 +144,12 @@ async fn clean_transcript(
     instruction: String,
 ) -> Result<provider::ProviderResult, String> {
     let _work = integration::dictation_work(&app)?;
-    provider::clean(&text, &config, &instruction).await
+    let state = app.state::<integration::ActivityState>();
+    let generation = state.generation();
+    tokio::select! {
+        result = provider::clean(&text, &config, &instruction) => result,
+        () = state.cancelled(generation) => Err("Dictation cancelled.".into()),
+    }
 }
 
 #[tauri::command]
@@ -177,6 +190,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_audio_inputs,
+            desktop_integration::get_foreground_app,
+            desktop_integration::list_source_apps,
+            desktop_integration::capture_readiness,
+            desktop_integration::open_windows_settings,
+            desktop_integration::get_launch_at_login,
+            desktop_integration::set_launch_at_login,
+            desktop_integration::export_text_file,
             start_recording,
             stop_recording,
             delete_recording,
@@ -209,8 +229,10 @@ pub fn run() {
             meetings::delete_meeting,
             meetings::export_meeting_markdown,
             meetings::meeting_audio_path,
+            meetings::list_meeting_audio_chunks,
             integration::apply_dictionary,
             integration::set_dictation_busy,
+            integration::cancel_dictation_work,
             shortcuts::register_shortcuts,
             shortcuts::suspend_shortcuts,
             shortcuts::set_escape_active,

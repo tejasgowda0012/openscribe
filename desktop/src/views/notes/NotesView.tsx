@@ -13,6 +13,12 @@ import type { VoiceNote } from "../../api/parityTypes";
 import { DayNoteView } from "./DayNoteView";
 import { localDay } from "../../core/dailyNotes";
 import { reportUiError } from "../../workspaceEvents";
+import { exportText } from "./exportText";
+import { TeachCorrection } from "./TeachCorrection";
+import { LibraryContextMenu } from "./LibraryContextMenu";
+import { editNoteText, noteListing, notePreview, noteText, noteTitle, visibleCaptures } from "./libraryHelpers";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { isSyntheticDayId, selectedDayNote } from "./dayNoteHelpers";
 
 interface NotesViewProps {
   notes: VoiceNote[];
@@ -36,26 +42,33 @@ export const NotesView: React.FC<NotesViewProps> = ({
   onStartMeeting
 }) => {
   const [search, setSearch] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [limit, setLimit] = useState(60);
+  const [originalId, setOriginalId] = useState<string | null>(null);
+  const [teach, setTeach] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "daily" | "written">("all");
   const [drafts, setDrafts] = useState<Record<string, VoiceNote>>({});
-  const [saveStatus, setSaveStatus] = useState("");
+  const [saveStatuses, setSaveStatuses] = useState<Record<string, string>>({});
+  const versions = useRef(new Map<string, number>());
+  const setNoteStatus = (id: string, status: string) => setSaveStatuses(current => ({ ...current, [id]: status }));
   const pending = useRef(new Map<string, VoiceNote>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const writes = useRef<Promise<unknown>>(Promise.resolve());
   const refresh = useRef(onRefreshNotes); refresh.current = onRefreshNotes;
   const allNotes = [...notes.map(note => drafts[note.id] ?? note), ...Object.values(drafts).filter(note => !notes.some(existing => existing.id === note.id))];
   const flush = () => {
-    const edits = [...pending.current.values()]; pending.current.clear();
-    for (const note of edits) {
+    const edits = [...pending.current.values()].map(note => ({ note, version: versions.current.get(note.id) })); pending.current.clear();
+    for (const { note, version } of edits) {
       writes.current = writes.current.catch(() => undefined).then(async () => {
         await saveNote(note);
         await refresh.current();
-        setSaveStatus("Saved");
+        if (versions.current.get(note.id) === version) setNoteStatus(note.id, "Saved");
         setDrafts(current => {
           if (current[note.id] !== note) return current;
           const next = { ...current }; delete next[note.id]; return next;
         });
-      }).catch(error => { setSaveStatus("Could not save. Your draft is still here; edit to retry."); reportUiError(error); });
+      }).catch(error => { setNoteStatus(note.id, "Could not save. Your draft is still here; edit or retry."); reportUiError(error); });
     }
   };
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); flush(); }, []);
@@ -80,27 +93,12 @@ export const NotesView: React.FC<NotesViewProps> = ({
     );
   }, [notes, todayStr]);
 
-  // Filter notes
-  const filteredNotes = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return allNotes.filter((n) => {
-      if (filter === "daily" && !n.captures) return false;
-      if (filter === "written" && n.captures) return false;
-      if (!q) return true;
-
-      const titleMatch = n.title.toLowerCase().includes(q);
-      const textMatch = (n.cleanedText || n.rawText).toLowerCase().includes(q);
-      const captureMatch = n.captures?.some(
-        (c) =>
-          c.text.toLowerCase().includes(q) ||
-          c.rawText.toLowerCase().includes(q) ||
-          (c.recognizedText ?? "").toLowerCase().includes(q)
-      );
-      return titleMatch || textMatch || captureMatch;
-    });
-  }, [notes, drafts, search, filter]);
+  const listing = noteListing(allNotes, { search, filter, todayId: todayNote.id, limit });
+  useEffect(() => setLimit(60), [search, filter]);
 
   const selectedNote = useMemo(() => {
+    const dayNote = selectedDayNote(allNotes, selectedId);
+    if (dayNote) return dayNote;
     if (!selectedId || selectedId === "today-placeholder" || selectedId === todayNote.id) {
       return todayNote;
     }
@@ -108,22 +106,24 @@ export const NotesView: React.FC<NotesViewProps> = ({
   }, [notes, drafts, selectedId, todayNote]);
 
   const handleUpdateNote = async (updated: VoiceNote) => {
+    if (isSyntheticDayId(updated.id)) throw new Error("Add an entry before changing this day's saved note.");
     await saveNote(updated);
     await onRefreshNotes();
   };
   const handleEdit = (updated: VoiceNote) => {
+    versions.current.set(updated.id, (versions.current.get(updated.id) ?? 0) + 1);
     setDrafts(current => ({ ...current, [updated.id]: updated }));
-    if (!notes.some(note => note.id === updated.id) && !updated.cleanedText.trim() && !updated.rawText.trim() && (!updated.title.trim() || updated.title === "Untitled note")) {
-      pending.current.delete(updated.id); setSaveStatus("Draft · type to save"); return;
+    if (!notes.some(note => note.id === updated.id) && !noteText(updated).trim() && (!updated.title.trim() || updated.title === "Untitled note")) {
+      pending.current.delete(updated.id); setNoteStatus(updated.id, "Draft · type to save"); return;
     }
-    setSaveStatus("Unsaved changes");
+    setNoteStatus(updated.id, "Saving…");
     pending.current.set(updated.id, updated);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(flush, 400);
   };
 
   const handleDelete = async (id: string) => {
-    if (id === "today-placeholder") return;
+    if (isSyntheticDayId(id)) return;
     try {
       pending.current.delete(id);
       await writes.current;
@@ -151,15 +151,27 @@ export const NotesView: React.FC<NotesViewProps> = ({
     };
     setDrafts(current => ({ ...current, [newNote.id]: newNote }));
     onSelectNote(newNote.id);
-    setSaveStatus("Draft · type to save");
+    setNoteStatus(newNote.id, "Draft · type to save");
   };
 
   const isSelectedToday =
     selectedNote.id === "today-placeholder" ||
     (selectedNote.captures != null && localDay(selectedNote.createdAt) === todayStr);
 
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.altKey || event.shiftKey || document.querySelector('[aria-modal="true"]')) return;
+      if (event.key.toLowerCase() === "n") { event.preventDefault(); handleCreateWrittenNote(); }
+      if (event.key.toLowerCase() === "f") { event.preventDefault(); searchInput.current?.focus(); }
+      if (event.key.toLowerCase() === "t") { event.preventDefault(); onSelectNote(todayNote.id); }
+    };
+    window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler);
+  }, [todayNote.id, onSelectNote]);
+
   return (
     <div style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
+      {teach && <TeachCorrection onClose={() => setTeach(false)} />}
+      {pendingDelete && <ConfirmDialog title="Delete this note?" confirmLabel="Delete" onCancel={() => setPendingDelete(null)} onConfirm={() => { const id = pendingDelete; setPendingDelete(null); void handleDelete(id); }}>This cannot be undone. Linked meetings are kept in Meetings.</ConfirmDialog>}
       {/* Sidebar Library */}
       <div
         className="library-pane"
@@ -217,6 +229,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
           >
             <Search size={14} color="var(--os-ink-muted)" />
             <input
+              ref={searchInput}
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -257,7 +270,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
                 textTransform: "capitalize"
               }}
             >
-              {t}
+              {t === "daily" ? "Days" : t}
             </button>
           ))}
         </div>
@@ -301,15 +314,15 @@ export const NotesView: React.FC<NotesViewProps> = ({
                 </span>
               </div>
               <span style={{ fontSize: 11.5, color: "var(--os-ink-muted)" }}>
-                {todayNote.captures?.length ?? 0} entries
+                {visibleCaptures(todayNote).length} entries
               </span>
             </button>
           )}
 
-          {filteredNotes.length === 0 && (search.trim() || filter === "written") && (
+          {listing.total === 0 && (search.trim() || filter === "written") && (
             <p className="list-empty" role="status">{search.trim() ? "No matching notes" : "No written notes yet"}</p>
           )}
-          {filteredNotes.map((n) => {
+          {listing.rows.map(({ note: n, group }, index) => {
             if (n.id === todayNote.id && filter !== "written" && !search) return null;
             const isSelected = selectedNote.id === n.id;
             const isDaily = n.captures != null;
@@ -319,8 +332,14 @@ export const NotesView: React.FC<NotesViewProps> = ({
             });
 
             return (
+              <React.Fragment key={n.id}>
+              {(index === 0 || listing.rows[index - 1].group !== group) && <div style={{ padding: "12px 12px 6px", color: "var(--os-ink-muted)", fontSize: 11 }}>{group}</div>}
+              <LibraryContextMenu actions={[
+                { label: "Copy", run: () => { void navigator.clipboard.writeText(noteText(n)).catch(reportUiError); } },
+                { label: n.isPinned ? "Unpin" : "Pin", run: () => { void handleUpdateNote({ ...n, isPinned: !n.isPinned }).catch(reportUiError); } },
+                { label: "Delete…", run: () => setPendingDelete(n.id) }
+              ]}>
               <button
-                key={n.id}
                 aria-pressed={isSelected}
                 onClick={() => onSelectNote(n.id)}
                 style={{
@@ -349,18 +368,21 @@ export const NotesView: React.FC<NotesViewProps> = ({
                       minWidth: 0
                     }}
                   >
-                    {n.title || (isDaily ? dateStr : "Untitled Note")}
+                    {isDaily ? new Date(n.createdAt).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" }) : noteTitle(n)}
                   </span>
                   {n.isPinned && <Pin size={11} color="var(--os-accent)" fill="var(--os-accent)" />}
                 </div>
+                <span style={{ fontSize: 12, color: "var(--os-ink-muted)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{notePreview(n) || "Start writing…"}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--os-ink-muted)" }}>
                   <span>{dateStr}</span>
                   <span>·</span>
-                  <span>{isDaily ? `${n.captures?.length ?? 0} entries` : "Written"}</span>
+                  <span>{isDaily ? `${visibleCaptures(n).length} entries` : "Written"}</span>
                 </div>
               </button>
+              </LibraryContextMenu></React.Fragment>
             );
           })}
+          {listing.total > limit && <button onClick={() => setLimit(current => current + 60)}>Show older notes</button>}
         </div>
       </div>
 
@@ -373,7 +395,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
             isToday={isSelectedToday}
             onUpdate={handleUpdateNote}
             onRefresh={onRefreshNotes}
-            onDeleteNote={handleDelete}
+            onDeleteNote={setPendingDelete}
             onOpenMeeting={onOpenMeeting}
             onStartDictation={onStartDictation}
             onStartMeeting={onStartMeeting}
@@ -401,7 +423,7 @@ export const NotesView: React.FC<NotesViewProps> = ({
               />
               <button
                 aria-label="Delete note"
-                onClick={() => handleDelete(selectedNote.id)}
+                onClick={() => setPendingDelete(selectedNote.id)}
                 style={{
                   background: "transparent",
                   border: "none",
@@ -412,14 +434,20 @@ export const NotesView: React.FC<NotesViewProps> = ({
                 <Trash2 size={16} />
               </button>
             </div>
+            <div className="ui-toolbar" style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+              <button onClick={() => handleEdit({ ...selectedNote, isPinned: !selectedNote.isPinned })}>{selectedNote.isPinned ? "Unpin" : "Pin"}</button>
+              <button onClick={() => { void navigator.clipboard.writeText(originalId === selectedNote.id ? selectedNote.rawText : noteText(selectedNote)).catch(reportUiError); }}>Copy</button>
+              <button onClick={() => { void exportText(originalId === selectedNote.id ? selectedNote.rawText : noteText(selectedNote), noteTitle(selectedNote), "txt").catch(reportUiError); }}>Export as text…</button>
+              <button onClick={() => setTeach(true)}>Teach a correction…</button>
+              {(originalId === selectedNote.id || selectedNote.rawText && selectedNote.rawText !== noteText(selectedNote)) && <button aria-pressed={originalId === selectedNote.id} onClick={() => setOriginalId(originalId === selectedNote.id ? null : selectedNote.id)}>{originalId === selectedNote.id ? "Note" : "Original"}</button>}
+            </div>
+            {originalId === selectedNote.id && <small>Original transcript · read only</small>}
             <textarea
-              value={selectedNote.cleanedText || selectedNote.rawText}
+              readOnly={originalId === selectedNote.id}
+              aria-label={originalId === selectedNote.id ? "Original transcript" : "Note text"}
+              value={originalId === selectedNote.id ? selectedNote.rawText : noteText(selectedNote)}
               onChange={(e) =>
-                handleEdit({
-                  ...selectedNote,
-                  cleanedText: e.target.value,
-                  rawText: e.target.value
-                })
+                handleEdit(editNoteText(selectedNote, e.target.value))
               }
               placeholder="Write your note here…"
               style={{
@@ -434,7 +462,9 @@ export const NotesView: React.FC<NotesViewProps> = ({
                 fontFamily: "inherit"
               }}
             />
-            <small style={{ color: "var(--os-ink-muted)" }} role="status">{saveStatus}</small>
+            <small style={{ color: "var(--os-ink-muted)" }} role="status">{saveStatuses[selectedNote.id] || "Saved"}</small>
+            <small style={{ color: "var(--os-ink-muted)" }}>{noteText(selectedNote).split(/\s+/).filter(Boolean).length} words</small>
+            {drafts[selectedNote.id] && <button onClick={() => { pending.current.set(selectedNote.id, selectedNote); flush(); }}>Save now / retry</button>}
           </div>
         )}
       </div>

@@ -4,6 +4,9 @@ import type { AppSettings, AudioInput } from "./types";
 import type { ParitySettings } from "./api/parityTypes";
 
 type Settings = AppSettings | ParitySettings;
+export interface SourceApp { id: string; name: string; path: string }
+export interface AccessStatus { ready: boolean; detail: string }
+export interface CaptureReadiness { microphone: AccessStatus; systemAudio: AccessStatus; paste: AccessStatus; calendar: AccessStatus }
 export const speechAccount = (settings: Settings) => `speech:${settings.speechProvider}:${"speechBaseURL" in settings ? settings.speechBaseURL : settings.speechBaseUrl}`;
 export const writingAccount = (settings: Settings) => "languageModelProvider" in settings ? `writing:${settings.languageModelProvider}:${settings.languageModelBaseURL}` : `writing:${settings.writingProvider}:${settings.writingBaseUrl}`;
 
@@ -20,6 +23,9 @@ export const config = (settings: Settings, purpose: "speech" | "writing") => pur
 };
 
 export const native = {
+  foregroundApp: () => invoke<SourceApp | null>("get_foreground_app"),
+  captureReadiness: () => invoke<CaptureReadiness>("capture_readiness"),
+  cancelDictationWork: () => invoke<void>("cancel_dictation_work"),
   listInputs: () => invoke<AudioInput[]>("list_audio_inputs"),
   startRecording: (deviceId?: string) => invoke<string>("start_recording", { deviceId: deviceId || null }),
   stopRecording: () => invoke<{ path: string; duration: number }>("stop_recording"),

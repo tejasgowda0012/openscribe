@@ -1047,6 +1047,16 @@ pub fn export_meeting_markdown(app: tauri::AppHandle, id: Id) -> Result<String, 
     controller(&app, |c| Ok(c.store.get(id)?.markdown()))
 }
 #[tauri::command]
+pub fn list_meeting_audio_chunks(
+    app: tauri::AppHandle,
+    id: Id,
+) -> Result<Vec<MeetingSegment>, String> {
+    controller(&app, |c| {
+        c.store.get(id)?;
+        Ok(meeting_audio::inventory(&c.store.validated_directory(id)?, true)?.chunks)
+    })
+}
+#[tauri::command]
 pub fn meeting_audio_path(
     app: tauri::AppHandle,
     id: Id,

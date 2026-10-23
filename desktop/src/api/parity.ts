@@ -185,7 +185,8 @@ export interface LevelEvent {
 
 export interface ShortcutActionEvent {
   action: string;
-  state: "pressed" | "released";
+  /** "cancelled": Right Ctrl was combined with another key, so it was not meant for dictation. */
+  state: "pressed" | "released" | "cancelled";
 }
 
 export type CalendarPromptStartEvent = CalendarPrompt;

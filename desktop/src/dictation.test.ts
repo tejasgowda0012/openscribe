@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DictationController, type DictationDependencies } from "./dictation";
 import type { ParitySettings } from "./api/parityTypes";
+import { defaultParitySettings } from "./settings";
 
 function fixture(patch: Partial<DictationDependencies> = {}) {
   const events: string[] = [];
@@ -19,6 +20,28 @@ function fixture(patch: Partial<DictationDependencies> = {}) {
   return { controller: new DictationController(deps), deps, events };
 }
 describe("authoritative dictation lifecycle", () => {
+  it("cancels processing without saving a late response or deleting an older recovery", async () => {
+    let resolve!: (text: string) => void;
+    const pending = new Promise<string>(r => { resolve = r; });
+    const f = fixture({ transcribe: vi.fn(() => pending), cancelProcessing: vi.fn(async () => undefined) });
+    f.controller.jobs = [{ id: "older", path: "older.wav", duration: 1, createdAt: "2026-01-01T00:00:00Z" }];
+    await f.controller.start();
+    const processing = f.controller.finish();
+    await vi.waitFor(() => expect(f.deps.transcribe).toHaveBeenCalled());
+    await f.controller.finish(true); resolve("Late response"); await processing;
+    expect(f.deps.cancelProcessing).toHaveBeenCalledOnce();
+    expect(f.deps.save).not.toHaveBeenCalled(); expect(f.deps.paste).not.toHaveBeenCalled();
+    expect(f.controller.jobs.map(job => job.id)).toEqual(["older"]);
+    expect(f.deps.removeAudio).toHaveBeenCalledWith("test.wav");
+    expect(f.deps.error).not.toHaveBeenCalled();
+  });
+  it("uses the source app writing style and saves its identity", async () => {
+    const settings: ParitySettings = { ...defaultParitySettings, saveRawAudio: false, pasteIntoFocusedApp: false, writingTone: "natural", appWritingTones: { "c:\\chat.exe": "casual" } };
+    const f = fixture({ settings: () => settings, sourceApp: async () => ({ name: "Chat", id: "C:\\Chat.exe" }) });
+    await f.controller.start(); await f.controller.finish();
+    expect(f.deps.transform).toHaveBeenCalledWith("Original", expect.objectContaining({ writingTone: "casual" }));
+    expect(f.deps.save).toHaveBeenCalledWith(expect.objectContaining({ sourceApplication: "Chat", sourceBundleIdentifier: "C:\\Chat.exe" }));
+  });
   it("finishes a hold released while microphone startup is pending", async () => {
     let ready!: () => void;
     const f = fixture({ start: () => new Promise<void>(r => { ready = r; }) });

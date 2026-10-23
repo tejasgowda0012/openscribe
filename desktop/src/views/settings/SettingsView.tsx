@@ -1,353 +1,78 @@
-import React, { useState } from "react";
-import {
-  CalendarDays,
-  Command,
-  KeyRound,
-  Lock,
-  Mic,
-  Moon,
-  Monitor,
-  Network,
-  RotateCcw,
-  Sliders,
-  Sparkles,
-  Sun,
-  Trash2,
-  Volume2
-} from "lucide-react";
+import React, { useEffect, useState } from "react";
 import type { CalendarEvent, ParitySettings } from "../../api/parityTypes";
 import type { AudioInput } from "../../types";
+import { native } from "../../native";
+import { providers } from "../../defaults";
 import { ProvidersSettings } from "./ProvidersSettings";
 import { CalendarSettings } from "./CalendarSettings";
 import { PersonalizationSettings } from "./PersonalizationSettings";
 import { ShortcutsSettings } from "./ShortcutsSettings";
-import { ConfirmDialog } from "../ConfirmDialog";
-
-interface SettingsViewProps {
+import { PermissionsView } from "./PermissionsView";
+import { SettingsDialog, settingsBox as box, settingsField as field } from "./SettingsDialog";
+import { settingsNative, type SaveSettings } from "./settingsSupport";
+export type SettingsSection = "general" | "providers" | "shortcuts" | "personalize" | "calendar" | "privacy" | "permissions";
+export interface SettingsViewProps {
   settings: ParitySettings;
   calendarEvents?: CalendarEvent[];
-  onUpdateSettings: (settings: ParitySettings) => void;
-  onRefreshCalendar?: () => void;
-  onClearNotesHistory?: () => void;
-  onRevealFlowbar?: () => void;
+  onUpdateSettings: SaveSettings;
+  onRefreshCalendar?: () => void | Promise<void>;
+  onClearNotesHistory?: () => void | Promise<void>;
+  onRevealFlowbar?: () => void | Promise<void>;
   inputs?: AudioInput[];
-  initialSection?: "general" | "calendar";
+  onRefreshInputs?: () => AudioInput[] | void | Promise<AudioInput[] | void>;
+  initialSection?: SettingsSection;
+  selectedSection?: SettingsSection;
+  onSectionChange?: (section: SettingsSection) => void;
+  hideNavigation?: boolean;
+  notesCount?: number;
+  meetingsCount?: number;
 }
-
-export const SettingsView: React.FC<SettingsViewProps> = ({
-  settings,
-  calendarEvents = [],
-  onUpdateSettings,
-  onRefreshCalendar,
-  onClearNotesHistory,
-  onRevealFlowbar,
-  inputs = [],
-  initialSection = "general"
-}) => {
-  const [section, setSection] = useState<
-    "general" | "providers" | "shortcuts" | "personalize" | "calendar" | "privacy"
-  >(initialSection);
-
+const sections: { id: SettingsSection; label: string }[] = [ { id: "general", label: "General" }, { id: "providers", label: "Providers" }, { id: "shortcuts", label: "Shortcuts" }, { id: "personalize", label: "Personalization" }, { id: "calendar", label: "Calendar" }, { id: "privacy", label: "Privacy" }, { id: "permissions", label: "Permissions" } ];
+export function SettingsView({ settings, calendarEvents = [], onUpdateSettings, onRefreshCalendar, onClearNotesHistory, onRevealFlowbar, inputs = [], onRefreshInputs, initialSection = "general", selectedSection, onSectionChange, hideNavigation = false, notesCount, meetingsCount }: SettingsViewProps) {
+  const [localSection, setLocalSection] = useState<SettingsSection>(initialSection);
+  const section = selectedSection ?? localSection;
+  const navigate = (next: SettingsSection) => { setLocalSection(next); onSectionChange?.(next); };
   const [confirmClear, setConfirmClear] = useState(false);
-
-  const updateSetting = <K extends keyof ParitySettings>(
-    key: K,
-    val: ParitySettings[K]
-  ) => {
-    const next = { ...settings, [key]: val };
-    onUpdateSettings(next);
-  };
-
-  return (
-    <div className="settings-workspace" style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
-      {/* Subnav sidebar */}
-      <div
-        className="settings-navigation"
-        style={{
-          width: 220, flexShrink: 0,
-          borderRight: "1px solid var(--os-line)",
-          background: "var(--os-background)",
-          padding: "20px 12px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 4
-        }}
-      >
-        <h2 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 16px 8px" }}>
-          Settings
-        </h2>
-
-        {[
-          { id: "general", label: "General", icon: Sliders },
-          { id: "providers", label: "Providers & Audio", icon: Mic },
-          { id: "shortcuts", label: "Shortcuts", icon: Command },
-          { id: "personalize", label: "Personalization", icon: Sparkles },
-          { id: "calendar", label: "Calendar", icon: CalendarDays },
-          { id: "privacy", label: "Privacy", icon: Lock }
-        ].map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            aria-current={section === id ? "page" : undefined}
-            onClick={() => setSection(id as any)}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "8px 12px",
-              borderRadius: 6,
-              background: section === id ? "var(--os-accent-soft)" : "transparent",
-              color: section === id ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink)",
-              border: "none",
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: section === id ? 600 : 500,
-              textAlign: "left"
-            }}
-          >
-            <Icon size={15} />
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {confirmClear && (
-        <ConfirmDialog title="Clear note history?" confirmLabel="Delete all notes" onCancel={() => setConfirmClear(false)} onConfirm={() => { onClearNotesHistory?.(); setConfirmClear(false); }}>
-          All local notes will be permanently deleted.
-        </ConfirmDialog>
-      )}
-
-      {/* Main content pane */}
-      <div className="settings-content" style={{ flex: 1, minWidth: 0, minHeight: 0, height: "100%", overflowY: "auto", padding: "28px 36px" }}>
-        {section === "general" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 24, maxWidth: 650 }}>
-            {/* Appearance */}
-            <div
-              style={{
-                background: "var(--os-surface)",
-                border: "1px solid var(--os-line)",
-                borderRadius: 10,
-                padding: "16px 20px"
-              }}
-            >
-              <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: "0 0 10px" }}>
-                Appearance
-              </h4>
-              <div className="appearance-options" role="group" aria-label="Appearance">
-                {([
-                  { value: "system", label: "System", icon: Monitor },
-                  { value: "light", label: "Light", icon: Sun },
-                  { value: "dark", label: "Dark", icon: Moon }
-                ] as const).map(({ value, label, icon: Icon }) => (
-                  <button
-                    key={value}
-                    aria-pressed={settings.theme === value}
-                    onClick={() => updateSetting("theme", value)}
-                    className="appearance-option"
-                  >
-                    <Icon size={14} /> {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Flowbar Settings */}
-            <div
-              style={{
-                background: "var(--os-surface)",
-                border: "1px solid var(--os-line)",
-                borderRadius: 10,
-                padding: "16px 20px",
-                display: "flex",
-                flexDirection: "column",
-                gap: 16
-              }}
-            >
-              <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>
-                Flowbar Behavior
-              </h4>
-              <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <strong style={{ fontSize: 13, display: "block" }}>
-                    Keep on screen when idle
-                  </strong>
-                  <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
-                    Shows a quiet sliver when idle so it's always ready.
-                  </span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={settings.showOverlayWhenIdle}
-                  onChange={(e) => updateSetting("showOverlayWhenIdle", e.target.checked)}
-                />
-              </div>
-
-              <div style={{ height: 1, background: "var(--os-line)" }} />
-
-              <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <strong style={{ fontSize: 13, display: "block" }}>
-                    Default Position
-                  </strong>
-                  <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
-                    Where the Flowbar sits when not dragged manually.
-                  </span>
-                </div>
-                <select
-                  value={settings.overlayPosition ?? "bottom-center"}
-                  onChange={(e) => {
-                    const next = {
-                      ...settings,
-                      overlayPosition: e.target.value,
-                      flowbarPlacement: null
-                    };
-                    onUpdateSettings(next);
-                  }}
-                  style={{
-                    padding: "5px 10px",
-                    borderRadius: 6,
-                    border: "1px solid var(--os-line)",
-                    fontSize: 12.5
-                  }}
-                >
-                  <option value="bottom-center">Bottom center</option>
-                  <option value="bottom-left">Bottom left</option>
-                  <option value="bottom-right">Bottom right</option>
-                  <option value="top-center">Top center</option>
-                  <option value="top-right">Top right</option>
-                </select>
-              </div>
-
-              {onRevealFlowbar && (
-                <div style={{ paddingTop: 4 }}>
-                  <button
-                    onClick={onRevealFlowbar}
-                    style={{
-                      background: "var(--os-surface-muted)",
-                      border: "1px solid var(--os-line)",
-                      borderRadius: 6,
-                      padding: "5px 12px",
-                      fontSize: 12,
-                      cursor: "pointer"
-                    }}
-                  >
-                    Can’t find it? Show me the Flowbar
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Dictation options */}
-            <div
-              style={{
-                background: "var(--os-surface)",
-                border: "1px solid var(--os-line)",
-                borderRadius: 10,
-                padding: "16px 20px",
-                display: "flex",
-                flexDirection: "column",
-                gap: 16
-              }}
-            >
-              <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>
-                Dictation & Audio
-              </h4>
-              <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <strong style={{ fontSize: 13, display: "block" }}>
-                    Paste into focused app
-                  </strong>
-                  <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
-                    Immediately pastes your finalized transcription into the active window.
-                  </span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={settings.pasteIntoFocusedApp}
-                  onChange={(e) => updateSetting("pasteIntoFocusedApp", e.target.checked)}
-                />
-              </div>
-
-              <div style={{ height: 1, background: "var(--os-line)" }} />
-
-              <div className="settings-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <strong style={{ fontSize: 13, display: "block" }}>
-                    Interaction sounds
-                  </strong>
-                  <span style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
-                    Plays subtle chimes on start and finish.
-                  </span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={settings.interactionSounds}
-                  onChange={(e) => updateSetting("interactionSounds", e.target.checked)}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {section === "providers" && <ProvidersSettings settings={settings} inputs={inputs} onUpdateSettings={onUpdateSettings} />}
-        {section === "shortcuts" && (
-          <ShortcutsSettings settings={settings} onUpdateSettings={onUpdateSettings} />
-        )}
-
-        {section === "personalize" && (
-          <PersonalizationSettings settings={settings} onUpdateSettings={onUpdateSettings} />
-        )}
-
-        {section === "calendar" && (
-          <CalendarSettings
-            settings={settings}
-            events={calendarEvents}
-            onUpdateSettings={onUpdateSettings}
-            onRefreshCalendar={onRefreshCalendar}
-          />
-        )}
-
-        {section === "privacy" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 650 }}>
-            <div
-              style={{
-                background: "var(--os-surface)",
-                border: "1px solid var(--os-line)",
-                borderRadius: 10,
-                padding: "16px 20px"
-              }}
-            >
-              <h4 style={{ fontSize: 13.5, fontWeight: 600, margin: "0 0 6px" }}>
-                Local Data & Privacy
-              </h4>
-              <p style={{ fontSize: 12.5, color: "var(--os-ink-muted)", margin: "0 0 16px" }}>
-                Your notes, screenshots, and meeting recordings are stored on this device.
-                OpenScribe never syncs your data to any cloud service.
-              </p>
-
-              {onClearNotesHistory && (
-                <button
-                  onClick={() => setConfirmClear(true)}
-                  style={{
-                    background: "var(--os-recording-soft)",
-                    border: "1px solid var(--os-line)",
-                    color: "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))",
-                    borderRadius: 6,
-                    padding: "6px 12px",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6
-                  }}
-                >
-                  <Trash2 size={13} /> Clear note history
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [devices, setDevices] = useState(inputs);
+  const [refreshing, setRefreshing] = useState(false);
+  const [login, setLogin] = useState<boolean | null>(null);
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  useEffect(() => setDevices(inputs), [inputs]);
+  useEffect(() => { let active = true; void settingsNative.getLaunchAtLogin().then(value => { if (active) setLogin(value); }).catch(failure => { if (active) setLoginError(String(failure)); }); return () => { active = false; }; }, []);
+  const run = async (action: () => void | Promise<void>) => { setError(""); try { await action(); } catch (failure) { setError(String(failure)); } };
+  const update = <K extends keyof ParitySettings>(key: K, value: ParitySettings[K]) => { void run(() => onUpdateSettings({ ...settings, [key]: value })); };
+  const refreshInputs = async () => { setRefreshing(true); try { const result = onRefreshInputs ? await onRefreshInputs() : await native.listInputs(); if (result) setDevices(result); setError(""); } catch (failure) { setError(String(failure)); } finally { setRefreshing(false); } };
+  const toggle = (key: "showOverlayWhenIdle" | "pasteIntoFocusedApp" | "interactionSounds" | "saveRawAudio", title: string, detail?: string) => <label style={{ display: "flex", justifyContent: "space-between", gap: 16 }}><span>{title}{detail && <small style={{ display: "block", color: "var(--os-ink-muted)" }}>{detail}</small>}</span><input type="checkbox" checked={settings[key]} onChange={event => update(key, event.target.checked)} /></label>;
+  return <div className="settings-workspace" style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
+    {!hideNavigation && <nav className="settings-navigation" aria-label="Settings" style={{ width: 200, flexShrink: 0, borderRight: "1px solid var(--os-line)", padding: 16, display: "flex", flexDirection: "column", gap: 8 }}><h2>Settings</h2>{sections.map(item => <button key={item.id} aria-current={section === item.id ? "page" : undefined} onClick={() => navigate(item.id)}>{item.label}</button>)}</nav>}
+    <div className="settings-content" style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "28px 32px" }}>
+      <h2>{sections.find(item => item.id === section)?.label}</h2>
+      {error && <p role="alert">{error}</p>}
+      {section === "general" && <div style={{ display: "flex", flexDirection: "column", gap: 22, maxWidth: 700 }}>
+        <section style={box}><h3>Appearance</h3><div role="group" aria-label="Appearance" style={{ display: "flex", gap: 14 }}>{(["system", "light", "dark"] as const).map(theme => <button key={theme} aria-pressed={settings.theme === theme} onClick={() => update("theme", theme)} style={{ flex: 1, border: `2px solid ${settings.theme === theme ? "var(--os-accent)" : "var(--os-line)"}`, borderRadius: 10, padding: 8, background: "var(--os-surface)", color: "var(--os-ink)" }}>
+          <span aria-hidden="true" style={{ display: "flex", height: 72, marginBottom: 8, borderRadius: 6, overflow: "hidden", background: theme === "dark" ? "#20242b" : theme === "system" ? "linear-gradient(110deg,#faf7f2 50%,#20242b 50%)" : "#faf7f2" }}><span style={{ width: "25%", background: "#8e8c8a44" }} /><span style={{ flex: 1, padding: 10 }}><span style={{ display: "block", height: 7, width: "75%", marginBottom: 7, borderRadius: 3, background: "#ad9978" }} /><span style={{ display: "block", height: 5, width: "90%", background: "#97979788" }} /><span style={{ display: "block", height: 5, width: "60%", marginTop: 7, background: "#97979788" }} /></span></span>{theme[0].toUpperCase() + theme.slice(1)}
+        </button>)}</div></section>
+        <section style={box}><h3>Startup</h3><label style={{ display: "flex", justifyContent: "space-between" }}>Launch at login<input type="checkbox" aria-label="Launch at login" disabled={login === null || loginBusy} checked={login ?? false} onChange={event => { const enabled = event.target.checked; setLoginBusy(true); setLoginError(""); void settingsNative.setLaunchAtLogin(enabled).then(() => setLogin(enabled)).catch(failure => setLoginError(String(failure))).finally(() => setLoginBusy(false)); }} /></label><small>{login === null ? "Startup state unavailable until Windows responds." : "OpenScribe is ready when you log in to Windows."}</small>{loginError && <><p role="alert">{loginError}</p><button disabled={loginBusy} onClick={() => { setLoginBusy(true); void settingsNative.getLaunchAtLogin().then(value => { setLogin(value); setLoginError(""); }).catch(failure => setLoginError(String(failure))).finally(() => setLoginBusy(false)); }}>Refresh startup state</button></>}</section>
+        <section style={box}><h3>Recording</h3><label style={field}>Microphone<select value={settings.microphoneDeviceUID} onChange={event => update("microphoneDeviceUID", event.target.value)}><option value="">System default</option>{devices.map(input => <option key={input.id} value={input.id}>{input.name}</option>)}{settings.microphoneDeviceUID && !devices.some(input => input.id === settings.microphoneDeviceUID) && <option value={settings.microphoneDeviceUID}>Selected microphone unavailable</option>}</select></label><button disabled={refreshing} onClick={() => { void refreshInputs(); }}>{refreshing ? "Refreshing..." : "Refresh microphones"}</button><div>Dictation, meetings, and screenshots from any app. <button onClick={() => navigate("shortcuts")}>Edit shortcuts</button></div>{toggle("pasteIntoFocusedApp", "Paste into the focused app", "Recordings started in the workspace are saved to Notes.")}</section>
+        <section style={box}><h3>Flowbar</h3>{toggle("showOverlayWhenIdle", "Keep on screen when idle", "Hover for dictation, meetings, and screenshots.")}
+          <label style={field}>Position<select value={settings.flowbarPlacement ? "custom" : settings.overlayPosition ?? "bottom-center"} onChange={event => { if (event.target.value !== "custom") void run(() => onUpdateSettings({ ...settings, overlayPosition: event.target.value, flowbarPlacement: null })); }}>{["bottom-center", "bottom-left", "bottom-right", "top-center", "top-right"].map(position => <option key={position} value={position}>{position.replace("-", " ")}</option>)}{settings.flowbarPlacement && <option value="custom">Where I placed it</option>}</select></label>
+          <small>Drag the Flowbar anywhere. It snaps to the center and edges and remembers where you leave it.</small>{onRevealFlowbar && <button onClick={() => { void run(onRevealFlowbar); }}>Show me the Flowbar</button>}{toggle("interactionSounds", "Recording sounds")}
+        </section>
+      </div>}
+      {section === "providers" && <ProvidersSettings settings={settings} inputs={devices} onUpdateSettings={onUpdateSettings} />}
+      {section === "shortcuts" && <ShortcutsSettings settings={settings} onUpdateSettings={onUpdateSettings} />}
+      {section === "personalize" && <PersonalizationSettings settings={settings} onUpdateSettings={onUpdateSettings} />}
+      {section === "calendar" && <CalendarSettings settings={settings} events={calendarEvents} onUpdateSettings={onUpdateSettings} onRefreshCalendar={onRefreshCalendar} />}
+      {section === "permissions" && <PermissionsView onOpenCalendar={() => navigate("calendar")} />}
+      {section === "privacy" && <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 700 }}>
+        <section style={box}><h3>On this device</h3><span>Notes: {notesCount ?? "Count unavailable"}</span><span>Meetings: {meetingsCount ?? "Count unavailable"}</span>{toggle("saveRawAudio", "Keep dictation audio", "Keep audio after successful transcription.")}<small>Notes, screenshots and meeting history stay locally. OpenScribe does not sync your library to a cloud account.</small></section>
+        <section style={box}><h3>Your providers</h3><p>Recordings are sent to {providers.find(item => item.id === settings.speechProvider)?.title ?? settings.speechProvider} for transcription.</p><p>{settings.cleanupEnabled ? `Writing is sent to ${providers.find(item => item.id === settings.languageModelProvider)?.title ?? settings.languageModelProvider} for cleanup. Meeting summaries also use your writing provider.` : "Dictation cleanup is off. Meeting summaries and enabled spoken corrections can still use your writing provider."}</p><button onClick={() => navigate("providers")}>Manage providers</button></section>
+        {onClearNotesHistory && <section style={box}><h3>Note history</h3><p>Permanently delete local notes. Meetings and provider keys are kept.</p><button onClick={() => { setError(""); setConfirmClear(true); }}>Clear note history...</button></section>}
+      </div>}
     </div>
-  );
-};
+    {confirmClear && <SettingsDialog title="Delete all notes?" busy={busy} onClose={() => setConfirmClear(false)}><p>This permanently removes {notesCount === undefined ? "all" : notesCount} local notes. Meetings and provider keys are kept.</p><button disabled={busy} onClick={() => setConfirmClear(false)}>Cancel</button> <button disabled={busy} onClick={() => { setBusy(true); void Promise.resolve().then(() => onClearNotesHistory?.()).then(() => { setConfirmClear(false); setError(""); }).catch(failure => setError(String(failure))).finally(() => setBusy(false)); }}>{busy ? "Deleting..." : "Delete all notes"}</button>{error && <p role="alert">{error}</p>}</SettingsDialog>}
+  </div>;
+}

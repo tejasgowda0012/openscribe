@@ -55,6 +55,12 @@ import {
 import { reportUiError, sendIntent } from "../../workspaceEvents";
 import { MeetingRecordings } from "./MeetingRecordings";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { emitTo } from "@tauri-apps/api/event";
+import { parityEvents } from "../../api/parity";
+import { exportText } from "../notes/exportText";
+import { AudioTrackDialog } from "./AudioTrackDialog";
+import { withMeetingDraft } from "./meetingEditorHelpers";
+import { SegmentAudio } from "./SegmentAudio";
 
 interface MeetingsViewProps {
   meetings: MeetingRecord[];
@@ -76,11 +82,18 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
   onUpdateSettings
 }) => {
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<"summary" | "transcript" | "notes" | "recording">("summary");
+  const [tab, setTab] = useState<"summary" | "transcript" | "notes">("notes");
+  const [showAudio, setShowAudio] = useState(false);
+  const [exportMenu, setExportMenu] = useState(false);
+  const [audioSegmentId, setAudioSegmentId] = useState<string | null>(null);
+  const [level, setLevel] = useState(0);
+  const [liveProgress, setLiveProgress] = useState<Record<string, string>>({});
+  const [saveStatus, setSaveStatus] = useState("");
   const [transcriptSearch, setTranscriptSearch] = useState("");
   const [trackFilter, setTrackFilter] = useState<"all" | "microphone" | "system">("all");
   const [startDropdown, setStartDropdown] = useState(false);
   const [confirmDiscardAll, setConfirmDiscardAll] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const citationTarget = useRef<HTMLDivElement>(null);
   const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | null>(null);
 
@@ -92,16 +105,23 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
   const flushEdits = () => {
     const pending = [...edits.current.values()]; edits.current.clear();
     for (const record of pending) saveQueue.current = saveQueue.current.catch(() => undefined).then(async () => {
-      await updateMeeting(record); refresh.current([]);
+      await updateMeeting(record); refresh.current([]); setSaveStatus("Saved");
       setDrafts(current => { if (current[record.id] !== record) return current; const next = { ...current }; delete next[record.id]; return next; });
-    }).catch(reportUiError);
+    }).catch(error => { setSaveStatus("Could not save. Your draft is kept here; edit or Retry save."); reportUiError(error); });
   };
   const editRecord = (record: MeetingRecord) => {
+    setSaveStatus("Saving…");
     setDrafts(current => ({ ...current, [record.id]: record })); edits.current.set(record.id, record);
     if (saveTimer.current) clearTimeout(saveTimer.current); saveTimer.current = setTimeout(flushEdits, 400);
   };
   useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); flushEdits(); }, []);
   const run = (operation: Promise<unknown>) => { void operation.catch(reportUiError); };
+  useEffect(() => {
+    const levels = parityEvents.onMeetingLevel(value => setLevel(Math.max(0, Math.min(1, value.level))));
+    const progress = parityEvents.onMeetingProgress(value => setLiveProgress(current => ({ ...current, [value.id]: value.message })));
+    void levels.catch(reportUiError); void progress.catch(reportUiError);
+    return () => { void levels.then(stop => stop()).catch(reportUiError); void progress.then(stop => stop()).catch(reportUiError); };
+  }, [activeMeetingId]);
   const recoverableMeetings = meetings.filter(record => record.status === "failed" || record.status === "interrupted");
 
   // Group meetings by date
@@ -124,9 +144,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
     const yesterdayStr = yesterday.toDateString();
 
     filtered.forEach((m) => {
-      // m.createdAt is unix_seconds - 978307200 in Apple format, or normal unix epoch
-      // Real timestamp: (m.createdAt > 2000000000 ? m.createdAt : (m.createdAt + 978307200) * 1000)
-      const ts = m.createdAt > 10000000000 ? m.createdAt : (m.createdAt + 978307200) * 1000;
+      const ts = (m.createdAt + 978307200) * 1000;
       const d = new Date(ts);
       let label: string;
       if (d.toDateString() === todayStr) {
@@ -145,9 +163,9 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
 
   const selectedRecord = useMemo(() => {
     if (selectedId) {
-      const record = meetings.find((m) => m.id === selectedId) ?? meetings[0]; return record ? drafts[record.id] ?? record : null;
+      const record = meetings.find((m) => m.id === selectedId) ?? meetings[0]; return record ? withMeetingDraft(record, drafts[record.id]) : null;
     }
-    return meetings[0] ? drafts[meetings[0].id] ?? meetings[0] : null;
+    return meetings[0] ? withMeetingDraft(meetings[0], drafts[meetings[0].id]) : null;
   }, [meetings, selectedId, drafts]);
 
   const passages = useMemo(() => {
@@ -173,8 +191,15 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
   };
   const handleExportMarkdown = async () => {
     if (!selectedRecord) return;
-    try { const md = await exportMeetingMarkdown(selectedRecord.id); await navigator.clipboard.writeText(md); }
+    try { const md = await currentMarkdown(); await navigator.clipboard.writeText(md); }
     catch (error) { reportUiError(error); }
+  };
+  const currentMarkdown = async () => {
+    if (!selectedRecord) throw new Error("Select a meeting first.");
+    flushEdits(); await saveQueue.current;
+    // A failed debounce save keeps a draft. Export must retry that write and fail visibly if it cannot persist.
+    if (drafts[selectedRecord.id]) await updateMeeting(selectedRecord);
+    return exportMeetingMarkdown(selectedRecord.id);
   };
 
   const jumpToCitation = (sourceId: string) => {
@@ -182,6 +207,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
     setTrackFilter("all");
     setTab("transcript");
     setHighlightedSegmentId(sourceId);
+    setAudioSegmentId(sourceId);
   };
 
   useEffect(() => {
@@ -191,12 +217,16 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
     return () => window.clearTimeout(timer);
   }, [highlightedSegmentId]);
 
-  useEffect(() => { setTranscriptSearch(""); setTrackFilter("all"); setHighlightedSegmentId(null); }, [selectedRecord?.id]);
+  useEffect(() => {
+    setTranscriptSearch(""); setTrackFilter("all"); setHighlightedSegmentId(null); setAudioSegmentId(null); setShowAudio(false);
+    setTab(selectedRecord?.id === activeMeetingId ? "notes" : selectedRecord?.summary ? "summary" : selectedRecord?.userNotes || !selectedRecord?.segments.length ? "notes" : "transcript");
+  }, [selectedRecord?.id]);
   const isActive = selectedRecord?.id === activeMeetingId;
   const isProcessing = selectedRecord?.status === "transcribing" || selectedRecord?.status === "summarizing";
 
   return (
     <div style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
+      {pendingDelete && <ConfirmDialog title="Delete this meeting?" confirmLabel="Delete" onCancel={() => setPendingDelete(null)} onConfirm={() => { const id = pendingDelete; setPendingDelete(null); void handleDelete(id); }}>The recording and transcript will be permanently deleted.</ConfirmDialog>}
       {/* Left Sidebar List */}
       <div
         className="library-pane"
@@ -221,6 +251,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
             Meetings
           </h2>
           <div style={{ position: "relative" }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setStartDropdown(false); }} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setStartDropdown(false); } }}>
+            <button disabled={!!activeMeetingId || (!settings.meetingMicrophone && !settings.meetingSystemAudio)} onClick={handleStartMeeting} style={{ background: "var(--os-accent)", color: "var(--os-primary-text)", border: 0, borderRadius: 6, padding: "5px 10px" }}>Start</button>
             <button
               aria-expanded={startDropdown}
               onClick={() => setStartDropdown((p) => !p)}
@@ -238,7 +269,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 fontWeight: 600
               }}
             >
-              <Plus size={13} /> Start <ChevronDown size={12} />
+              <ChevronDown size={12} aria-label="Meeting recording preferences" />
             </button>
 
             {startDropdown && (
@@ -265,6 +296,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
                   <input
                     type="checkbox"
+                    disabled={settings.meetingMicrophone && !settings.meetingSystemAudio}
                     checked={settings.meetingMicrophone}
                     onChange={(e) =>
                       onUpdateSettings?.({ ...settings, meetingMicrophone: e.target.checked })
@@ -275,6 +307,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
                   <input
                     type="checkbox"
+                    disabled={settings.meetingSystemAudio && !settings.meetingMicrophone}
                     checked={settings.meetingSystemAudio}
                     onChange={(e) =>
                       onUpdateSettings?.({ ...settings, meetingSystemAudio: e.target.checked })
@@ -433,6 +466,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                         {m.status}
                       </span>
                     </div>
+                    <span style={{ color: "var(--os-ink-muted)", fontSize: 12, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{(m.summary?.overview[0]?.text || m.userNotes || m.segments[0]?.text || "").slice(0, 280)}</span>
                   </button>
                 );
               })}
@@ -445,6 +479,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
       <div className="detail-pane" style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
         {selectedRecord ? (
           <>
+            {showAudio && <AudioTrackDialog record={selectedRecord} busy={isActive || isProcessing} onEdit={editRecord} onClose={() => { flushEdits(); setShowAudio(false); }} />}
             {/* Detail Toolbar */}
             <div
               className="ui-toolbar"
@@ -457,7 +492,16 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 background: "var(--os-background)"
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                <button onClick={() => { run(emitTo("main", "workspace://open-day", { meetingId: selectedRecord.id, createdAt: selectedRecord.createdAt })); }}>Open day note</button>
+                <button onClick={() => setShowAudio(true)}>Audio &amp; track names…</button>
+                <div style={{ position: "relative" }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setExportMenu(false); }}>
+                  <button aria-expanded={exportMenu} onClick={() => setExportMenu(value => !value)}>Export ▾</button>
+                  {exportMenu && <div style={{ position: "absolute", right: 0, top: 30, zIndex: 60, padding: 8, background: "var(--os-surface)", border: "1px solid var(--os-line)", borderRadius: 8, minWidth: 190 }}>
+                    <button onClick={() => { setExportMenu(false); run((async () => { const text = await currentMarkdown(); await exportText(text, selectedRecord.title, "md"); })()); }}>Export as Markdown…</button>
+                    <button onClick={() => { setExportMenu(false); void handleExportMarkdown(); }}>Copy Markdown</button>
+                  </div>}
+                </div>
                 <input
                   type="text"
                   aria-label="Meeting title"
@@ -499,7 +543,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 </button>
                 <button
                   disabled={isActive || isProcessing}
-                  onClick={() => handleDelete(selectedRecord.id)}
+                  onClick={() => setPendingDelete(selectedRecord.id)}
                   title="Delete meeting"
                   style={{
                     background: "transparent",
@@ -544,10 +588,11 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                         {selectedRecord.status === "paused" ? "Meeting Paused" : "Meeting Recording Active"}
                       </strong>
                       <span style={{ fontSize: 11.5, color: "var(--os-ink-muted)", display: "block" }}>
-                        {formatDuration(selectedRecord.duration)} · {selectedRecord.liveTranscription ? "Live transcription active" : "Transcription on stop"}
+                        {formatDuration(selectedRecord.duration)} · {selectedRecord.liveTranscription ? "Live transcript · saved audio sections" : "Transcription on stop"}
                       </span>
                     </div>
                   </div>
+                  <meter min={0} max={1} value={selectedRecord.status === "paused" ? 0 : level} aria-label="Meeting audio level" style={{ width: 90 }} />
 
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
@@ -588,6 +633,10 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   </div>
                 </div>
               )}
+              {(isActive || isProcessing) && <p role="status">{liveProgress[selectedRecord.id] || (isProcessing ? selectedRecord.status === "summarizing" ? "Creating summary…" : "Transcribing saved audio…" : "")}</p>}
+              {isActive && selectedRecord.lastError && <div role="alert"><p>{selectedRecord.lastError}</p><button onClick={() => run(retryLiveTranscription())}>Retry live transcript</button></div>}
+              {saveStatus && <p role="status">{saveStatus} {drafts[selectedRecord.id] && <button onClick={() => { editRecord(selectedRecord); flushEdits(); }}>Retry save</button>}</p>}
+              {audioSegmentId && <SegmentAudio key={`${selectedRecord.id}/${audioSegmentId}`} record={selectedRecord} segmentId={audioSegmentId} />}
 
               {/* Short Meeting Confirmation Prompt */}
               {selectedRecord.summaryNeedsConfirmation && (
@@ -608,12 +657,13 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                       Very short meeting
                     </strong>
                     <span style={{ fontSize: 12, color: "var(--os-ink)", display: "block" }}>
-                      Only a few words were transcribed. Was this meeting started by mistake?
+                      Only {selectedRecord.segments.map(segment => segment.text).join(" ").split(/\s+/).filter(Boolean).length} words were transcribed, so it wasn’t summarized automatically. Was it started by mistake?
                     </span>
                   </div>
 
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
+                      disabled={isActive || isProcessing}
                       onClick={async () => {
                         try { await summarizeShortMeeting(selectedRecord.id); onUpdateMeetings([]); }
                         catch (error) { reportUiError(error); }
@@ -632,6 +682,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                       Summarize anyway
                     </button>
                     <button
+                      disabled={isActive || isProcessing}
                       onClick={async () => {
                         try { await skipSummary(selectedRecord.id); onUpdateMeetings([]); }
                         catch (error) { reportUiError(error); }
@@ -647,10 +698,10 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                         cursor: "pointer"
                       }}
                     >
-                      No summary needed
+                      Keep transcript only
                     </button>
                     <button
-                      onClick={() => handleDelete(selectedRecord.id)}
+                      onClick={() => setPendingDelete(selectedRecord.id)}
                       style={{
                         background: "transparent",
                         border: "none",
@@ -666,7 +717,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
               )}
 
               {/* Error Banner */}
-              {selectedRecord.lastError && (
+              {selectedRecord.lastError && !isActive && (
                 <div
                   style={{
                     background: "var(--os-recording-soft)",
@@ -713,7 +764,6 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 setConfirmDiscardAll(false);
                 run((async () => { try { for (const record of recoverableMeetings) await deleteMeeting(record.id); } finally { onUpdateMeetings([]); } })());
               }}>Failed and interrupted meetings and their recordings will be permanently deleted.</ConfirmDialog>}
-              {isActive && selectedRecord.lastError && <button className="quiet" onClick={() => run(retryLiveTranscription())}>Retry live transcription</button>}
               {(selectedRecord.status === "transcribing" || selectedRecord.status === "summarizing") && <button className="quiet" onClick={() => run(cancelProcessing())}>Cancel processing</button>}
             </div>
 
@@ -729,6 +779,20 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 fontWeight: 500
               }}
             >
+              <button
+                onClick={() => setTab("notes")}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: tab === "notes" ? "2px solid var(--os-accent)" : "2px solid transparent",
+                  color: tab === "notes" ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink-muted)",
+                  padding: "6px 2px",
+                  cursor: "pointer",
+                  fontWeight: tab === "notes" ? 600 : 500
+                }}
+              >
+                My notes
+              </button>
               <button
                 onClick={() => setTab("summary")}
                 style={{
@@ -757,21 +821,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
               >
                 Transcript ({selectedRecord.segments.length})
               </button>
-              <button
-                onClick={() => setTab("notes")}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  borderBottom: tab === "notes" ? "2px solid var(--os-accent)" : "2px solid transparent",
-                  color: tab === "notes" ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink-muted)",
-                  padding: "6px 2px",
-                  cursor: "pointer",
-                  fontWeight: tab === "notes" ? 600 : 500
-                }}
-              >
-                My notes
-              </button>
-              <button onClick={() => setTab("recording")} style={{ background: "transparent", border: "none", borderBottom: tab === "recording" ? "2px solid var(--os-accent)" : "2px solid transparent", padding: "6px 2px", color: tab === "recording" ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "var(--os-ink-muted)", cursor: "pointer" }}>Recording</button>
+
             </div>
 
             {/* Tab Contents */}
@@ -973,7 +1023,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                   <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                     {passages.length === 0 ? (
                       <p style={{ color: "var(--os-ink-muted)", fontSize: 13.5, fontStyle: "italic" }}>
-                        No transcript passages available.
+                        {isActive ? selectedRecord.liveTranscription ? "Text appears here as each saved section of audio is ready." : "The transcript is created when you stop." : "No transcript passages available."}
                       </p>
                     ) : (
                       passages.map((p) => {
@@ -1008,6 +1058,7 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                               <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--os-ink-muted)" }}>
                                 {formatTimestamp(p.start)}
                               </span>
+                              <button aria-label={`Play passage at ${formatTimestamp(p.start)}`} onClick={() => setAudioSegmentId(p.segmentIDs[0])}><Play size={12} /> Play</button>
                             </div>
                             <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>
                               {p.text}
@@ -1020,7 +1071,6 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 </div>
               )}
 
-              {tab === "recording" && <MeetingRecordings record={selectedRecord} />}
               {tab === "notes" && (
                 <textarea
                   value={selectedRecord.userNotes ?? ""}

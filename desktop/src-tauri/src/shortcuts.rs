@@ -1,3 +1,4 @@
+use crate::modifier_hold::{self, HoldEvent, RIGHT_CTRL};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -65,11 +66,25 @@ fn parse(accelerator: &str) -> Result<Shortcut, String> {
     }
     Ok(shortcut)
 }
+/// Like Globe on macOS, Right Ctrl alone can only start dictation, which acts on press and release.
+fn holds(action: &str) -> bool {
+    action == "dictate" || action == "holdToTalk"
+}
 pub fn validate(bindings: &Bindings) -> Result<(), String> {
     let mut ids = HashSet::new();
+    let mut right_ctrl = false;
     for (action, binding) in bindings {
         if !ACTIONS.contains(&action.as_str()) {
             return Err("Unknown shortcut action.".into());
+        }
+        if binding.accelerator == RIGHT_CTRL {
+            if !holds(action) {
+                return Err("Right Ctrl on its own can only be used for dictation.".into());
+            }
+            if std::mem::replace(&mut right_ctrl, true) {
+                return Err("Two actions use the same shortcut.".into());
+            }
+            continue;
         }
         if !ids.insert(parse(&binding.accelerator)?.id()) {
             return Err("Two actions use the same shortcut.".into());
@@ -81,6 +96,12 @@ pub fn validate(bindings: &Bindings) -> Result<(), String> {
 fn install(app: &tauri::AppHandle, bindings: &Bindings) -> Vec<String> {
     let mut failures = Vec::new();
     for (action, binding) in bindings {
+        if binding.accelerator == RIGHT_CTRL {
+            if install_hold(app, action).is_err() {
+                failures.push(action.clone());
+            }
+            continue;
+        }
         let Ok(shortcut) = parse(&binding.accelerator) else {
             failures.push(action.clone());
             continue;
@@ -118,6 +139,53 @@ fn install(app: &tauri::AppHandle, bindings: &Bindings) -> Vec<String> {
         }
     }
     failures
+}
+/// Watches Right Ctrl for the action and reports it like a registered shortcut.
+fn install_hold(app: &tauri::AppHandle, action: &str) -> Result<(), String> {
+    let app = app.clone();
+    let action = action.to_string();
+    modifier_hold::start(std::sync::Arc::new(move |event| {
+        let state = app.state::<ShortcutManager>();
+        let Ok(mut registration) = state.0.lock() else {
+            return;
+        };
+        if registration.suspended
+            || !registration
+                .bindings
+                .get(&action)
+                .is_some_and(|binding| binding.accelerator == RIGHT_CTRL)
+        {
+            return;
+        }
+        let name = match event {
+            HoldEvent::Pressed => {
+                registration.pressed.insert(action.clone());
+                "pressed"
+            }
+            HoldEvent::Released => {
+                registration.pressed.remove(&action);
+                "released"
+            }
+            HoldEvent::Cancelled => {
+                registration.pressed.remove(&action);
+                "cancelled"
+            }
+        };
+        let _ = app.emit(
+            "shortcut://action",
+            ActionEvent {
+                action: action.clone(),
+                state: name,
+            },
+        );
+    }))
+}
+/// Releases every registered key, including the Right Ctrl watcher.
+fn deactivate(app: &tauri::AppHandle) -> Result<(), String> {
+    modifier_hold::stop();
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|_| "Could not release the previous shortcuts.".to_string())
 }
 fn escape_shortcut() -> Shortcut {
     Shortcut::new(None, Code::Escape)
@@ -171,9 +239,7 @@ pub fn register_shortcuts(
     if registration.suspended {
         return Ok(registration.failures.clone());
     }
-    app.global_shortcut()
-        .unregister_all()
-        .map_err(|_| "Could not release the previous shortcuts.")?;
+    deactivate(&app)?;
     release_pressed(&app, &mut registration);
     activate(&app, &mut registration);
     Ok(registration.failures.clone())
@@ -187,9 +253,7 @@ pub fn suspend_shortcuts(
     let mut registration = state.0.lock().map_err(|_| "Shortcut settings are busy.")?;
     if registration.suspended != suspended {
         if suspended {
-            app.global_shortcut()
-                .unregister_all()
-                .map_err(|_| "Could not suspend shortcuts.")?;
+            deactivate(&app).map_err(|_| "Could not suspend shortcuts.")?;
             release_pressed(&app, &mut registration);
         } else {
             activate(&app, &mut registration);
@@ -269,6 +333,17 @@ mod tests {
             ("pasteLast", "Ctrl+Alt+V")
         ]))
         .is_ok());
+    }
+    #[test]
+    fn right_ctrl_alone_is_only_for_dictation() {
+        assert!(validate(&bindings(&[("holdToTalk", "RightCtrl")])).is_ok());
+        assert!(validate(&bindings(&[("dictate", "RightCtrl")])).is_ok());
+        assert!(validate(&bindings(&[("meeting", "RightCtrl")])).is_err());
+        assert!(validate(&bindings(&[
+            ("dictate", "RightCtrl"),
+            ("holdToTalk", "RightCtrl")
+        ]))
+        .is_err());
     }
     #[test]
     fn cleared_actions_are_allowed() {

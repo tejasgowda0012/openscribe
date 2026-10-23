@@ -1,5 +1,5 @@
 ﻿import { it, expect } from "vitest";
-import { parseAccelerator, defaultBindings, validateBindings, ShortcutInterpreter, shortcutActions, assignShortcut, dictationHint } from "./shortcuts";
+import { parseAccelerator, defaultBindings, validateBindings, ShortcutInterpreter, shortcutActions, assignShortcut, dictationHint, rightCtrlBinding } from "./shortcuts";
 it("normalizes modifier aliases and display", () => {
   expect(parseAccelerator("shift+control+alt+v")).toEqual({accelerator:"Ctrl+Alt+Shift+V",display:"Ctrl Alt Shift V"});
   expect(parseAccelerator("CmdOrCtrl+Space").accelerator).toBe("Ctrl+Space");
@@ -48,4 +48,20 @@ it("the dictation hint falls back to push to talk and hides keys another app hol
   expect(dictationHint(defaultBindings, ["dictate"])).toBeNull();
   expect(dictationHint({ holdToTalk: parseAccelerator("Ctrl+Alt+H") })).toBe("Ctrl Alt H");
   expect(dictationHint({})).toBeNull();
+});
+it("Right Ctrl alone is for dictation only, and a Ctrl combination cancels only what it started", () => {
+  expect(() => validateBindings({ holdToTalk: rightCtrlBinding })).not.toThrow();
+  expect(() => validateBindings({ meeting: rightCtrlBinding })).toThrow(/dictation/);
+  expect(() => validateBindings({ dictate: rightCtrlBinding, holdToTalk: rightCtrlBinding })).toThrow(/same shortcut/);
+  const keys = new ShortcutInterpreter();
+  expect(keys.handle("holdToTalk","pressed",0,false)).toEqual(["startDictation"]);
+  expect(keys.handle("holdToTalk","cancelled",50,true)).toEqual(["cancelDictation"]);
+  expect(keys.handle("holdToTalk","released",60,false)).toEqual([]);
+  expect(keys.handle("dictate","pressed",100,false)).toEqual(["startDictation"]);
+  expect(keys.handle("dictate","released",150,true)).toEqual([]);
+  // A later Ctrl combination must not discard a dictation the key did not just start.
+  expect(keys.handle("dictate","pressed",900,true)).toEqual(["finishDictation"]);
+  expect(keys.handle("dictate","cancelled",950,false)).toEqual([]);
+  expect(keys.handle("holdToTalk","pressed",2000,false)).toEqual(["startDictation"]);
+  expect(keys.handle("holdToTalk","released",2600,true)).toEqual(["finishDictation"]);
 });

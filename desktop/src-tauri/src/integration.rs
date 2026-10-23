@@ -1,7 +1,7 @@
 //! Backend wiring. Calendar callbacks never read or lock CalendarState.
 use crate::{audio, calendar, dictionary, meetings, provider, storage};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex, MutexGuard,
 };
 use std::time::{Duration, Instant};
@@ -12,8 +12,24 @@ pub struct ActivityState {
     starts: Mutex<()>,
     dictation_ui: AtomicBool,
     dictation_work: Arc<AtomicUsize>,
+    cancel_generation: AtomicU64,
+    cancel: tokio::sync::Notify,
 }
 impl ActivityState {
+    pub fn generation(&self) -> u64 {
+        self.cancel_generation.load(Ordering::SeqCst)
+    }
+    pub async fn cancelled(&self, generation: u64) {
+        loop {
+            let notified = self.cancel.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.generation() != generation {
+                return;
+            }
+            notified.await;
+        }
+    }
     pub fn start_gate(&self) -> Result<MutexGuard<'_, ()>, String> {
         self.starts
             .lock()
@@ -26,6 +42,12 @@ impl ActivityState {
         self.dictation_work.fetch_add(1, Ordering::SeqCst);
         DictationWork(self.dictation_work.clone())
     }
+}
+#[tauri::command]
+pub fn cancel_dictation_work(app: tauri::AppHandle) {
+    let state = app.state::<ActivityState>();
+    state.cancel_generation.fetch_add(1, Ordering::SeqCst);
+    state.cancel.notify_waiters();
 }
 pub struct DictationWork(Arc<AtomicUsize>);
 impl Drop for DictationWork {
@@ -115,7 +137,12 @@ pub async fn apply_dictionary(
     settings: dictionary::DictionarySettings,
 ) -> Result<dictionary::Outcome, String> {
     let _work = dictation_work(&app)?;
-    dictionary::apply_dictionary(text, settings).await
+    let state = app.state::<ActivityState>();
+    let generation = state.generation();
+    tokio::select! {
+        result = dictionary::apply_dictionary(text, settings) => result,
+        () = state.cancelled(generation) => Err("Dictation cancelled.".into()),
+    }
 }
 
 struct Readiness {
@@ -295,6 +322,22 @@ fn session_active() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn cancellation_wakes_pending_work_and_is_not_inherited_by_new_work() {
+        let state = ActivityState::default();
+        let generation = state.generation();
+        state.cancel_generation.fetch_add(1, Ordering::SeqCst);
+        state.cancel.notify_waiters();
+        tokio::time::timeout(Duration::from_millis(100), state.cancelled(generation))
+            .await
+            .unwrap();
+        assert!(tokio::time::timeout(
+            Duration::from_millis(10),
+            state.cancelled(state.generation())
+        )
+        .await
+        .is_err());
+    }
     use serde_json::json;
     #[test]
     fn setup_installs_the_provider_hooks_idempotently() {

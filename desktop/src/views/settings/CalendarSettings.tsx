@@ -9,13 +9,14 @@ import {
   X
 } from "lucide-react";
 import { CalendarAgenda } from "./CalendarAgenda";
+import type { SaveSettings } from "./settingsSupport";
 import type { CalendarEvent, CalendarSource, ParitySettings } from "../../api/parityTypes";
 
 interface CalendarSettingsProps {
   settings: ParitySettings;
   events?: CalendarEvent[];
-  onUpdateSettings: (settings: ParitySettings) => void;
-  onRefreshCalendar?: () => void;
+  onUpdateSettings: SaveSettings;
+  onRefreshCalendar?: () => void | Promise<void>;
 }
 
 export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
@@ -24,12 +25,15 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
   onUpdateSettings,
   onRefreshCalendar
 }) => {
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const persist = async (next: ParitySettings, done?: () => void) => { setBusy(true); setError(""); try { await onUpdateSettings(next); done?.(); } catch (failure) { setError(String(failure)); } finally { setBusy(false); } };
   const [sourceName, setSourceName] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [excludedTitleInput, setExcludedTitleInput] = useState("");
 
   const handleToggle = (key: keyof ParitySettings, val: boolean) => {
-    onUpdateSettings({ ...settings, [key]: val });
+    void persist({ ...settings, [key]: val });
   };
 
   const handleAddSource = () => {
@@ -39,16 +43,14 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
       name: sourceName.trim(),
       url: sourceUrl.trim()
     };
-    onUpdateSettings({
+    void persist({
       ...settings,
       calendarSources: [...settings.calendarSources, newSource]
-    });
-    setSourceName("");
-    setSourceUrl("");
+    }, () => { setSourceName(""); setSourceUrl(""); });
   };
 
   const handleRemoveSource = (id: string) => {
-    onUpdateSettings({
+    void persist({
       ...settings,
       calendarSources: settings.calendarSources.filter((s) => s.id !== id)
     });
@@ -57,22 +59,23 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
   const handleAddExcludedTitle = () => {
     const title = excludedTitleInput.trim();
     if (!title || settings.calendarExcludedTitles.includes(title)) return;
-    onUpdateSettings({
+    void persist({
       ...settings,
       calendarExcludedTitles: [...settings.calendarExcludedTitles, title]
-    });
-    setExcludedTitleInput("");
+    }, () => setExcludedTitleInput(""));
   };
 
   const handleRemoveExcludedTitle = (title: string) => {
-    onUpdateSettings({
+    void persist({
       ...settings,
       calendarExcludedTitles: settings.calendarExcludedTitles.filter((t) => t !== title)
     });
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }} aria-busy={busy}>
+      {error && <p role="alert">{error}</p>}
+      <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, display: "contents" }}>
       {/* Header */}
       <div className="ui-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
@@ -85,7 +88,8 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
         </div>
         {onRefreshCalendar && (
           <button
-            onClick={onRefreshCalendar}
+            disabled={busy}
+            onClick={() => { setBusy(true); setError(""); void Promise.resolve().then(() => onRefreshCalendar?.()).catch(failure => setError(String(failure))).finally(() => setBusy(false)); }}
             style={{
               background: "transparent",
               border: "1px solid var(--os-line)",
@@ -128,6 +132,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
           </div>
           <input
             type="checkbox"
+            disabled={busy}
             checked={settings.calendarEnabled}
             onChange={(e) => handleToggle("calendarEnabled", e.target.checked)}
           />
@@ -146,6 +151,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
           </div>
           <input
             type="checkbox"
+            disabled={busy}
             checked={settings.calendarMeetingsOnly}
             onChange={(e) => handleToggle("calendarMeetingsOnly", e.target.checked)}
           />
@@ -164,6 +170,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
           </div>
           <input
             type="checkbox"
+            disabled={busy}
             checked={settings.calendarAutoStart}
             onChange={(e) => handleToggle("calendarAutoStart", e.target.checked)}
           />
@@ -182,6 +189,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
           </div>
           <input
             type="checkbox"
+            disabled={busy}
             checked={settings.calendarSummarize}
             onChange={(e) => handleToggle("calendarSummarize", e.target.checked)}
           />
@@ -212,7 +220,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
             style={{ flex: 1, minWidth: 0, minHeight: 0, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--os-line)", fontSize: 13 }}
           />
           <button
-            disabled={!excludedTitleInput.trim() || settings.calendarExcludedTitles.includes(excludedTitleInput.trim())}
+            disabled={busy || !excludedTitleInput.trim() || settings.calendarExcludedTitles.includes(excludedTitleInput.trim())}
             onClick={handleAddExcludedTitle}
             style={{
               background: "var(--os-accent)",
@@ -244,6 +252,8 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
             >
               {phrase}
               <button
+                disabled={busy}
+                aria-label={`Remove exclusion ${phrase}`}
                 onClick={() => handleRemoveExcludedTitle(phrase)}
                 style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0 }}
               >
@@ -286,7 +296,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
             style={{ flex: 1, minWidth: 0, minHeight: 0, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--os-line)", fontSize: 13 }}
           />
           <button
-            disabled={!sourceName.trim() || !sourceUrl.trim()}
+            disabled={busy || !sourceName.trim() || !sourceUrl.trim()}
             onClick={handleAddSource}
             style={{
               background: "var(--os-accent)",
@@ -322,6 +332,8 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
                 <span style={{ fontSize: 11.5, color: "var(--os-ink-muted)" }}>{source.url}</span>
               </div>
               <button
+                disabled={busy}
+                aria-label={`Remove ${source.name}`}
                 onClick={() => handleRemoveSource(source.id)}
                 style={{ background: "transparent", border: "none", color: "color-mix(in srgb, var(--os-recording) 72%, var(--os-ink))", cursor: "pointer" }}
               >
@@ -331,6 +343,7 @@ export const CalendarSettings: React.FC<CalendarSettingsProps> = ({
           ))}
         </div>
       </div>
+      </fieldset>
     </div>
   );
 };

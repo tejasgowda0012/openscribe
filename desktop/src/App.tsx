@@ -1,10 +1,15 @@
 import React, { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Window } from "@tauri-apps/api/window";
-import { AlertTriangle, CalendarDays, CircleStop, FileAudio, Library, Mic, Settings, Users, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, FileAudio, Library, Settings, Users, X } from "lucide-react";
 import { mainController } from "./mainController";
 import { dictationHint } from "./core/shortcuts";
 import { MeetingsView } from "./views/meetings/MeetingsView";
 import { NotesView } from "./views/notes/NotesView";
+import { CaptureDock } from "./views/CaptureDock";
+import { OnboardingView } from "./views/OnboardingView";
+import { SettingsDialog } from "./views/settings/SettingsDialog";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import type { SettingsSection } from "./views/settings/SettingsView";
 import { SettingsView } from "./views/settings/SettingsView";
 import type { ParitySettings } from "./api/parityTypes";
 import { useAppliedTheme } from "./theme";
@@ -12,11 +17,14 @@ import { ConfirmDialog } from "./views/ConfirmDialog";
 export { defaultParitySettings } from "./settings";
 
 export default function App() {
-  const { settings, notes, meetings, calendarEvents, recoveries, inputs, loaded, storageError, notice, phase, startPrompt, endPrompt, navigation, shortcutFailures } = useSyncExternalStore(mainController.subscribe, mainController.snapshot);
+  const { settings, notes, meetings, calendarEvents, recoveries, inputs, loaded, storageError, notice, phase, startPrompt, endPrompt, navigation, shortcutFailures, noticeDetails } = useSyncExternalStore(mainController.subscribe, mainController.snapshot);
   const activeMeetingId = mainController.activeMeeting?.id ?? null;
   // As on macOS, the hint names the dictation key only while it is actually registered.
   const hint = dictationHint(settings.shortcuts ?? {}, shortcutFailures);
   const [section, setSection] = useState<"notes" | "meetings" | "calendar" | "settings">("notes");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
+  const [setup, setSetup] = useState(false);
+  const [detailCopied, setDetailCopied] = useState(false);
   const [selectedNoteId, setSelectedNoteId] = useState("today-placeholder");
   const [selectedMeetingId, setSelectedMeetingId] = useState<string>();
   const [confirmDiscardAll, setConfirmDiscardAll] = useState(false);
@@ -25,7 +33,7 @@ export default function App() {
   const endCountdown = endPrompt?.automatic ? Math.max(0, Math.ceil((Date.parse(endPrompt.deadline) - now) / 1000)) : null;
   useEffect(() => { void mainController.initialize(); }, []);
   useEffect(() => {
-    if (navigation) { setSection(navigation.section); if (navigation.meetingId) setSelectedMeetingId(navigation.meetingId); }
+    if (navigation) { setSection(navigation.section); if (navigation.meetingId) setSelectedMeetingId(navigation.meetingId); if (navigation.noteId) setSelectedNoteId(navigation.noteId); if (navigation.settingsSection) setSettingsSection(navigation.settingsSection); }
   }, [navigation]);
   useAppliedTheme(settings.theme);
   useEffect(() => {
@@ -35,11 +43,11 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [startPrompt, endPrompt]);
   useEffect(() => {
-    const handleKey = (event: KeyboardEvent) => { if (event.key === "Escape") void mainController.dictation.finish(true); };
+    const handleKey = (event: KeyboardEvent) => { if (event.key === "Escape") void mainController.dictation.finish(true); if (event.ctrlKey && !event.altKey && ["1", "2", "3"].includes(event.key)) { event.preventDefault(); setSection(({ "1": "notes", "2": "meetings", "3": "calendar" } as const)[event.key as "1" | "2" | "3"]); } };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
-  const handleUpdateSettings = useCallback((updated: ParitySettings) => mainController.updateSettings(updated).catch(mainController.error), []);
+  const handleUpdateSettings = useCallback((updated: ParitySettings) => mainController.updateSettings(updated), []);
   const handleCalendarStartDecision = (decision: "start" | "skip") => { if (startPrompt) void mainController.decide(startPrompt, decision).catch(mainController.error); };
   const handleCalendarEndDecision = (decision: "finish" | "extend") => { if (endPrompt) void mainController.decide(endPrompt, decision).catch(mainController.error); };
   const handleStartDictation = () => { void mainController.intent({ action: "dictate" }); };
@@ -84,11 +92,13 @@ export default function App() {
         overflow: "hidden"
       }}
     >
+      {setup && <div style={{ position: "fixed", inset: 0, zIndex: 100 }}><OnboardingView settings={settings} onUpdateSettings={updated => mainController.updateSettings(updated)} phase={phase} transcript={notes[0]?.cleanedText} captureHint={notice ?? undefined} onLater={() => setSetup(false)} onComplete={async () => { await mainController.updateSettings({ ...settings, hasCompletedSetup: true }); setSetup(false); }} /></div>}
+      {noticeDetails && <SettingsDialog title="Notice details" onClose={mainController.closeNoticeDetails}><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{notice ?? storageError ?? "No current notice."}</pre><div style={{ display: "flex", gap: 8 }}><button onClick={() => { void writeText(notice ?? storageError ?? "").then(() => setDetailCopied(true)).catch(mainController.error); }}>{detailCopied ? "Copied" : "Copy details"}</button><button onClick={() => { mainController.closeNoticeDetails(); setSection("settings"); setSettingsSection("providers"); }}>Settings</button><button onClick={mainController.closeNoticeDetails}>Done</button></div></SettingsDialog>}
       {/* Main Sidebar */}
       <aside
         className="workspace-sidebar"
         style={{
-          width: 210, flexShrink: 0,
+          width: 210, flexShrink: 0, overflowY: "auto",
           borderRight: "1px solid var(--os-line)",
           display: "flex",
           flexDirection: "column",
@@ -202,103 +212,19 @@ export default function App() {
           </button>
         </nav>
 
-        <div style={{ flex: 1 }} />
-
-        {/* Settings button */}
-        <button
-          aria-current={section === "settings" ? "page" : undefined}
-          onClick={() => setSection("settings")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "8px 10px",
-            borderRadius: 7,
-            border: "none",
-            background: section === "settings" ? "var(--os-surface-hover)" : "transparent",
-            color: section === "settings" ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "inherit",
-            cursor: "pointer",
-            fontSize: 13,
-            fontWeight: section === "settings" ? 600 : 500,
-            marginBottom: 16
-          }}
-        >
-          <Settings size={16} />
-          <span>Settings</span>
-        </button>
-
-        {/* Capture Dock at foot of sidebar */}
-        <div
-          style={{
-            background: "var(--os-surface)",
-            border: "1px solid var(--os-line)",
-            borderRadius: 10,
-            padding: "12px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 8
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span
-              style={{
-                width: 7,
-                height: 7,
-                borderRadius: "50%",
-                background: phase === "recording" || activeMeetingId ? "var(--os-recording)" : "var(--os-accent)"
-              }}
-            />
-            <strong style={{ fontSize: 12 }}>
-              {activeMeetingId
-                ? "Meeting Active"
-                : phase === "recording"
-                ? "Listening"
-                : "Dictation"}
-            </strong>
-          </div>
-
-          <button
-            disabled={phase === "starting" || phase === "transcribing" || phase === "cleaning"}
-            onClick={activeMeetingId ? handleStartMeetingFromDock : handleStartDictation}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 6,
-              background: phase === "recording" ? "color-mix(in srgb, var(--os-recording) 78%, var(--os-ink))" : "var(--os-accent)",
-              color: "var(--os-primary-text)",
-              border: "none",
-              borderRadius: 6,
-              padding: "7px",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: "pointer"
-            }}
-          >
-            {phase === "recording" ? (
-              <>
-                <CircleStop size={14} /> Stop & save
-              </>
-            ) : phase === "starting" ? "Starting…" : phase === "transcribing" || phase === "cleaning" ? "Processing…" : activeMeetingId ? (
-              <>
-                <Users size={14} /> View meeting
-              </>
-            ) : (
-              <>
-                <Mic size={14} /> Record note
-              </>
-            )}
-          </button>
-          {hint && <small style={{ fontSize: 10.5, color: "var(--os-ink-muted)", textAlign: "center" }}>
-            {hint} to dictate
-          </small>}
-        </div>
+        <div style={{ fontSize: 10, color: "var(--os-ink-muted)", margin: "10px 6px 6px" }}>SETTINGS</div>
+        <nav aria-label="Settings" style={{ display: "grid", gap: 2 }}>
+          {([ ["general", "General"], ["shortcuts", "Shortcuts"], ["providers", "API & Models"], ["personalize", "Personalization"], ["privacy", "Privacy"], ["permissions", "Permissions"] ] as const).map(([id, label]) => <button key={id} aria-current={section === "settings" && settingsSection === id ? "page" : undefined} onClick={() => { setSettingsSection(id); setSection("settings"); }} style={{ textAlign: "left", padding: "7px 10px", border: "none", borderRadius: 7, color: "inherit", background: section === "settings" && settingsSection === id ? "var(--os-surface-hover)" : "transparent" }}><Settings size={13} style={{ marginRight: 8 }} />{label}</button>)}
+        </nav>
+        <div style={{ flex: 1, minHeight: 12 }} />
+        {!settings.hasCompletedSetup && <button style={{ marginBottom: 10 }} onClick={() => setSetup(true)}>Finish setup</button>}
+        <CaptureDock phase={phase} meeting={mainController.activeMeeting} hint={hint} />
       </aside>
 
       {/* Main Workspace Column */}
       <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
         <div className="workspace-banners">
-          {notice && <div className="workspace-banner" role="alert" style={{ padding: "10px 24px", background: "var(--os-recording-soft)", color: "var(--os-ink)", display: "flex", gap: 12 }}><span style={{ flex: 1 }}>{notice}</span><button onClick={mainController.clearNotice} aria-label="Dismiss notice"><X size={14} /></button></div>}
+          {notice && <div className="workspace-banner" role="alert" style={{ padding: "10px 24px", background: "var(--os-recording-soft)", color: "var(--os-ink)", display: "flex", gap: 12 }}><span style={{ flex: 1 }}>{notice}</span><button onClick={() => { void mainController.intent({ action: "inspectNotice" }); }}>Details</button><button onClick={mainController.clearNotice} aria-label="Dismiss notice"><X size={14} /></button></div>}
           {/* Global Storage Error Banner */}
           {storageError && (
             <div
@@ -553,6 +479,11 @@ export default function App() {
           {section === "settings" && (
             <SettingsView
               key="settings"
+              hideNavigation
+              selectedSection={settingsSection}
+              onSectionChange={next => { if (next === "calendar") setSection("calendar"); else setSettingsSection(next); }}
+              notesCount={notes.length}
+              meetingsCount={meetings.length}
               inputs={inputs}
               settings={settings}
               calendarEvents={calendarEvents}

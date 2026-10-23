@@ -23,7 +23,8 @@ import {
   removeCapture,
   saveNote,
   takeScreenshot,
-  updateCapture
+  updateCapture,
+  exportMeetingMarkdown
 } from "../../api/parity";
 import type {
   NoteCapture,
@@ -32,7 +33,15 @@ import type {
 } from "../../api/parityTypes";
 import { formatDuration } from "../meetings/transcriptHelpers";
 import { reportUiError, sendIntent } from "../../workspaceEvents";
-import { captureDateForDay } from "./dayNoteHelpers";
+import { dayMarkdown as markdownForDay } from "./dayMarkdown";
+import { captureDateForDay, isSyntheticDayId } from "./dayNoteHelpers";
+import { exportText } from "./exportText";
+import { EntryTextEditor } from "./EntryTextEditor";
+import { MeetingEntryCard } from "./MeetingEntryCard";
+import { LibraryContextMenu } from "./LibraryContextMenu";
+import { ConfirmDialog } from "../ConfirmDialog";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { writeImage } from "@tauri-apps/plugin-clipboard-manager";
 
 interface DayNoteViewProps {
   note: VoiceNote;
@@ -62,8 +71,10 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
   const [screenshotDropdown, setScreenshotDropdown] = useState(false);
 
   const [adding, setAdding] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [attachmentErrors, setAttachmentErrors] = useState<Record<string, boolean>>({});
   const captures = useMemo(() => (note.captures ?? []).filter(capture => !capture.superseded), [note.captures]);
+  const syntheticDay = isSyntheticDayId(note.id);
 
   useEffect(() => {
     // Resolve attachment paths
@@ -125,19 +136,28 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
   };
 
   const handleTogglePin = async () => {
+    if (syntheticDay) return;
     const updated = { ...note, isPinned: !note.isPinned };
     try { await onUpdate(updated); } catch (error) { reportUiError(error); }
   };
 
-  const handleCopyMarkdown = () => {
-    let md = `# ${note.title || "Daily Note"}\n\n`;
-    captures.forEach((c) => {
-      const time = new Date(c.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      md += `### ${time} · ${c.kind.toUpperCase()}\n`;
-      if (c.text) md += `${c.text}\n\n`;
-      if (c.recognizedText) md += `*OCR text:* ${c.recognizedText}\n\n`;
-    });
-    navigator.clipboard.writeText(md).catch(reportUiError);
+  const dayMarkdown = () => markdownForDay(note);
+  const handleCopyMarkdown = () => { void navigator.clipboard.writeText(dayMarkdown()).catch(reportUiError); };
+  const imageAction = async (entry: NoteCapture, action: "open" | "reveal" | "copy") => {
+    try {
+      if (!entry.attachment) throw new Error("This screenshot has no saved image attachment.");
+      const path = await attachmentPath(entry.attachment);
+      if (action === "open") await openPath(path);
+      else if (action === "reveal") await revealItemInDir(path);
+      else await writeImage(path);
+    } catch (error) { reportUiError(error); }
+  };
+  const copyEntry = async (entry: NoteCapture, original: boolean) => {
+    try {
+      if (entry.kind === "screenshot") { await imageAction(entry, "copy"); return; }
+      const text = entry.kind === "meeting" && entry.meetingID ? await exportMeetingMarkdown(entry.meetingID) : original ? entry.rawText : entry.text;
+      await navigator.clipboard.writeText(text);
+    } catch (error) { reportUiError(error); }
   };
 
   const dateObj = new Date(note.createdAt);
@@ -150,13 +170,16 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
   const dictationCount = captures.filter((c) => c.kind === "dictation").length;
   const screenshotCount = captures.filter((c) => c.kind === "screenshot").length;
   const meetingCount = captures.filter((c) => c.kind === "meeting").length;
+  const textCount = captures.filter(c => c.kind === "text").length;
 
   return (
     <div className="day-note" style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", padding: "28px 36px" }}>
+      {pendingDelete && <ConfirmDialog title="Delete this entry?" confirmLabel="Delete" onCancel={() => setPendingDelete(null)} onConfirm={() => { const id = pendingDelete; setPendingDelete(null); void handleDeleteEntry(id); }}>This cannot be undone. Linked meetings are kept in Meetings.</ConfirmDialog>}
       {/* Top Toolbar */}
       <div className="ui-toolbar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div style={{ fontSize: 12, color: "var(--os-ink-muted)" }}>
           {[
+            textCount ? `${textCount} written entr${textCount === 1 ? "y" : "ies"}` : null,
             dictationCount ? `${dictationCount} dictation${dictationCount > 1 ? "s" : ""}` : null,
             screenshotCount ? `${screenshotCount} screenshot${screenshotCount > 1 ? "s" : ""}` : null,
             meetingCount ? `${meetingCount} meeting${meetingCount > 1 ? "s" : ""}` : null
@@ -164,7 +187,9 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => { void exportText(dayMarkdown(), formattedDate, "md").catch(reportUiError); }}>Export as Markdown…</button>
           <button
+            disabled={syntheticDay}
             onClick={handleTogglePin}
             title={note.isPinned ? "Unpin day" : "Pin day"}
             style={{
@@ -199,7 +224,8 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
             <Copy size={13} /> Copy
           </button>
           <button
-            onClick={() => onDeleteNote(note.id)}
+            disabled={syntheticDay}
+            onClick={() => { if (!syntheticDay) onDeleteNote(note.id); }}
             title="Delete this day"
             style={{
               background: "transparent",
@@ -268,7 +294,8 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
             <Users size={14} color="var(--os-recording)" /> Meeting
           </button>
 
-          <div style={{ position: "relative" }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setScreenshotDropdown(false); }} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setScreenshotDropdown(false); } }}>
+          <div style={{ position: "relative", display: "flex" }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setScreenshotDropdown(false); }} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setScreenshotDropdown(false); } }}>
+            <button onClick={() => { void handleTakeScreenshot("area"); }} style={{ padding: "6px 14px", border: "1px solid var(--os-line)", background: "var(--os-surface)", color: "var(--os-ink)", borderRadius: 8 }}>Screenshot</button>
             <button
               aria-expanded={screenshotDropdown}
               onClick={() => setScreenshotDropdown((prev) => !prev)}
@@ -286,7 +313,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                 boxShadow: "var(--os-shadow)"
               }}
             >
-              <Camera size={14} color="var(--os-accent)" /> Screenshot <ChevronDown size={12} />
+              <ChevronDown size={12} aria-label="Screenshot options" />
             </button>
 
             {screenshotDropdown && (
@@ -374,8 +401,17 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
             const showingRaw = showOriginal[entry.id];
 
             return (
+              <LibraryContextMenu key={entry.id} actions={[
+                { label: "Copy", run: () => { void copyEntry(entry, !!showingRaw); } },
+                ...(entry.kind === "screenshot" ? [
+                  { label: "Open in image viewer", run: () => { void imageAction(entry, "open"); } },
+                  { label: "Show in Explorer", run: () => { void imageAction(entry, "reveal"); } },
+                  { label: "Copy text in image", disabled: !entry.recognizedText, run: () => { void navigator.clipboard.writeText(entry.recognizedText ?? "").catch(reportUiError); } }
+                ] : []),
+                ...(entry.meetingID ? [{ label: "Open meeting", run: () => onOpenMeeting?.(entry.meetingID!) }] : []),
+                { label: "Delete entry…", run: () => setPendingDelete(entry.id) }
+              ]}>
               <div
-                key={entry.id}
                 style={{
                   display: "flex",
                   gap: 16,
@@ -427,6 +463,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                       {entry.attachment && screenshotUrls[entry.attachment] && !attachmentErrors[entry.attachment] && (
                         <img
                           className="timeline-image"
+                          onDoubleClick={() => { void imageAction(entry, "open"); }}
                           onError={() => setAttachmentErrors(previous => ({ ...previous, [entry.attachment!]: true }))}
                           src={screenshotUrls[entry.attachment]}
                           alt="Screenshot capture"
@@ -440,7 +477,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                           }}
                         />
                       )}
-                      {entry.attachment && attachmentErrors[entry.attachment] && <p role="status">Screenshot preview unavailable.{entry.recognizedText ? " Saved image text is still available below." : ""}</p>}
+                      {(!entry.attachment || attachmentErrors[entry.attachment]) && <p role="status">Screenshot image unavailable.{entry.recognizedText ? " Saved image text is still available below." : ""}</p>}
                       {entry.recognizedText && (
                         <div style={{ marginTop: 4 }}>
                           <button
@@ -488,51 +525,12 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                       )}
                     </div>
                   ) : entry.kind === "meeting" ? (
-                    <div
-                      style={{
-                        background: "var(--os-surface)",
-                        border: "1px solid var(--os-line)",
-                        borderRadius: 10,
-                        padding: "10px 14px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        maxWidth: 420
-                      }}
-                    >
-                      <div>
-                        <strong style={{ fontSize: 13, display: "block" }}>
-                          {entry.title || "Meeting"}
-                        </strong>
-                        <span style={{ fontSize: 11.5, color: "var(--os-ink-muted)" }}>
-                          {entry.duration > 0 ? formatDuration(entry.duration) : "Meeting record"}
-                        </span>
-                      </div>
-                      {entry.meetingID && onOpenMeeting && (
-                        <button
-                          onClick={() => onOpenMeeting(entry.meetingID!)}
-                          style={{
-                            background: "transparent",
-                            border: "1px solid var(--os-line)",
-                            borderRadius: 6,
-                            padding: "4px 8px",
-                            fontSize: 11,
-                            cursor: "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 4
-                          }}
-                        >
-                          Open <ExternalLink size={11} />
-                        </button>
-                      )}
-                    </div>
+                    <MeetingEntryCard entry={entry} onOpen={onOpenMeeting} />
                   ) : (
                     <div style={{ fontSize: 14.5, lineHeight: 1.6, color: "var(--os-ink)" }}>
-                      {showingRaw ? entry.rawText : entry.text}
+                      {showingRaw ? <div style={{ whiteSpace: "pre-wrap" }}>{entry.rawText}</div> : <EntryTextEditor entry={entry} noteId={note.id} onRefresh={onRefresh} />}
                     </div>
                   )}
-
                   {/* Metadata & Actions */}
                   <div
                     style={{
@@ -574,7 +572,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                     )}
 
                     <button
-                      onClick={() => { void navigator.clipboard.writeText(showingRaw ? entry.rawText : entry.text || entry.rawText).catch(reportUiError); }}
+                      onClick={() => { void copyEntry(entry, !!showingRaw); }}
                       title="Copy text"
                       style={{
                         background: "transparent",
@@ -588,7 +586,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                     </button>
 
                     <button
-                      onClick={() => handleDeleteEntry(entry.id)}
+                      onClick={() => setPendingDelete(entry.id)}
                       title="Delete entry"
                       style={{
                         background: "transparent",
@@ -603,6 +601,7 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
                   </div>
                 </div>
               </div>
+              </LibraryContextMenu>
             );
           })
         )}
@@ -619,8 +618,8 @@ export const DayNoteView: React.FC<DayNoteViewProps> = ({
             flex: 1, minWidth: 0, minHeight: 0,
             padding: "10px 14px",
             borderRadius: 8,
-            border: "1px solid var(--os-line)",
-            background: "var(--os-surface)",
+            border: "none",
+            background: "transparent",
             fontSize: 14,
             outline: "none"
           }}
