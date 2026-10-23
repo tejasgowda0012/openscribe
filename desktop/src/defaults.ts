@@ -2,15 +2,27 @@ import type { AppSettings, PersistedState, ProviderChoice } from "./types";
 
 export const providers: ProviderChoice[] = [
   { id: "openRouter", title: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", speechModel: "mistralai/voxtral-mini-transcribe", writingModel: "openai/gpt-5.6-luna" },
-  { id: "openAI", title: "OpenAI", baseUrl: "https://api.openai.com/v1", speechModel: "gpt-4o-mini-transcribe", writingModel: "gpt-4o-mini" },
+  { id: "openAI", title: "OpenAI", baseUrl: "https://api.openai.com/v1", speechModel: "gpt-4o-mini-transcribe", writingModel: "gpt-5.6-luna" },
   { id: "groq", title: "Groq", baseUrl: "https://api.groq.com/openai/v1", speechModel: "whisper-large-v3-turbo", writingModel: "llama-3.3-70b-versatile" },
   { id: "deepgram", title: "Deepgram", baseUrl: "https://api.deepgram.com/v1", speechModel: "nova-3" },
   { id: "assemblyAI", title: "AssemblyAI", baseUrl: "https://api.assemblyai.com/v2", speechModel: "best" },
   { id: "mistral", title: "Mistral", baseUrl: "https://api.mistral.ai/v1", speechModel: "voxtral-mini-transcribe-realtime-2602" },
   { id: "anthropic", title: "Anthropic", baseUrl: "https://api.anthropic.com", writingModel: "claude-3-5-haiku-latest" },
-  { id: "google", title: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com", writingModel: "gemini-2.0-flash" },
+  { id: "google", title: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com", speechModel: "gemini-3.5-flash-lite", writingModel: "gemini-3.5-flash-lite" },
   { id: "custom", title: "Custom compatible endpoint", baseUrl: "https://example.com/v1", speechModel: "whisper-1", writingModel: "gpt-4o-mini" }
 ];
+
+/** Economical presets; selecting a provider never changes an existing saved connection. */
+export function modelPresets(provider: string, purpose: "speech" | "writing") {
+  if (provider === "openAI") return purpose === "speech" ? [
+    { id: "gpt-4o-mini-transcribe", label: "GPT-4o mini transcribe — economical · ~$0.003/min" },
+    { id: "gpt-4o-transcribe", label: "GPT-4o transcribe — higher accuracy · ~$0.006/min" }
+  ] : [{ id: "gpt-5.6-luna", label: "GPT-5.6 Luna — $0.20 input / $1.20 output per 1M tokens" }];
+  if (provider === "google") return [{ id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite — $0.30 input / $2.50 output per 1M tokens" }];
+  const choice = providers.find(item => item.id === provider);
+  const id = purpose === "speech" ? choice?.speechModel : choice?.writingModel;
+  return id && provider !== "custom" ? [{ id, label: id }] : [];
+}
 
 export const defaultSettings: AppSettings = {
   speechProvider: "openRouter",

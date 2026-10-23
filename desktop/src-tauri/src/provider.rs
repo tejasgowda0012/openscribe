@@ -122,6 +122,7 @@ async fn transcribe_impl(
         }
         "deepgram" => deepgram(&client, path, config, &key, hints).await?,
         "assemblyAI" => assembly_ai(&client, path, config, &key, hints).await?,
+        "google" => gemini_transcription(&client, path, config, &key, hints).await?,
         _ => openai_transcription(&client, path, config, &key, hints).await?,
     };
     transcription_result(&text, allow_empty)
@@ -374,9 +375,13 @@ async fn openai_chat(
     config: &ProviderConfig,
     key: &str,
 ) -> Result<String, String> {
-    let response = client.post(endpoint(&config.base_url, "chat/completions")).bearer_auth(key)
-        .json(&json!({"model": config.model, "temperature": 0.15, "messages": [{"role":"system","content":system},{"role":"user","content":text}]}))
-        .send().await.map_err(network_error)?;
+    let response = client
+        .post(endpoint(&config.base_url, "chat/completions"))
+        .bearer_auth(key)
+        .json(&writing_body(text, system, config))
+        .send()
+        .await
+        .map_err(network_error)?;
     decode_text_response(response, |value| {
         value
             .pointer("/choices/0/message/content")
@@ -384,6 +389,18 @@ async fn openai_chat(
             .map(str::to_string)
     })
     .await
+}
+
+fn writing_body(text: &str, system: &str, config: &ProviderConfig) -> Value {
+    let mut body = json!({"model":config.model,"messages":[{"role":"system","content":system},{"role":"user","content":text}]});
+    if config.model == "gpt-5.6-luna" || config.model == "openai/gpt-5.6-luna" {
+        // Cleanup is a short rewrite: avoid unnecessary billed reasoning tokens.
+        body["reasoning_effort"] = json!("none");
+        body["max_completion_tokens"] = json!(8192);
+    } else {
+        body["temperature"] = json!(0.15);
+    }
+    body
 }
 
 async fn anthropic(
@@ -412,21 +429,80 @@ async fn gemini(
     config: &ProviderConfig,
     key: &str,
 ) -> Result<String, String> {
-    let url = format!(
-        "{}/v1beta/models/{}:generateContent?key={}",
-        config.base_url.trim_end_matches('/'),
-        config.model,
-        key
-    );
-    let response = client.post(url).json(&json!({"systemInstruction":{"parts":[{"text":system}]},"contents":[{"role":"user","parts":[{"text":text}]}],"generationConfig":{"temperature":0.15}}))
+    let response = client.post(gemini_endpoint(config)).header("x-goog-api-key", key).json(&json!({"systemInstruction":{"parts":[{"text":system}]},"contents":[{"role":"user","parts":[{"text":text}]}]}))
         .send().await.map_err(network_error)?;
-    decode_text_response(response, |value| {
-        value
-            .pointer("/candidates/0/content/parts/0/text")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    })
-    .await
+    decode_text_response(response, gemini_text).await
+}
+
+fn gemini_endpoint(config: &ProviderConfig) -> String {
+    let base = config
+        .base_url
+        .trim_end_matches('/')
+        .trim_end_matches("/v1beta")
+        .trim_end_matches("/v1");
+    format!("{base}/v1beta/models/{}:generateContent", config.model)
+}
+fn gemini_text(value: &Value) -> Option<String> {
+    let parts = value.pointer("/candidates/0/content/parts")?.as_array()?;
+    let text = parts
+        .iter()
+        .filter(|part| part.get("thought").and_then(Value::as_bool) != Some(true))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("");
+    (!text.trim().is_empty()).then_some(text)
+}
+fn gemini_audio_body(audio: &[u8], hints: Option<&SpeechHints>) -> Value {
+    let mut prompt = "Transcribe only the speech in this audio. Preserve the spoken language and script, including mixed Hindi-English. Never translate. Return only the transcript, with punctuation. For silence or no speech return an empty string. Do not invent speech.".to_string();
+    if let Some(hints) = hints {
+        if let Some(context) = &hints.prompt {
+            prompt.push_str(&format!(
+                "\nSpelling hints and preceding context (do not repeat context): {context}"
+            ));
+        }
+        if !hints.terms.is_empty() {
+            prompt.push_str(&format!(
+                "\nVocabulary spellings: {}",
+                hints.terms.join(", ")
+            ));
+        }
+    }
+    json!({"contents":[{"role":"user","parts":[{"text":prompt},{"inlineData":{"mimeType":"audio/wav","data":BASE64.encode(audio)}}]}]})
+}
+async fn gemini_transcription(
+    client: &Client,
+    path: &Path,
+    config: &ProviderConfig,
+    key: &str,
+    hints: Option<&SpeechHints>,
+) -> Result<String, String> {
+    let audio = upload_bytes(path).await?;
+    let response = client
+        .post(gemini_endpoint(config))
+        .header("x-goog-api-key", key)
+        .json(&gemini_audio_body(&audio, hints))
+        .send()
+        .await
+        .map_err(network_error)?;
+    let value = checked_json(response).await?;
+    // An explicit empty text part is valid for a silent meeting chunk; blocked/malformed output is not.
+    if value
+        .pointer("/candidates/0/content/parts")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| {
+            parts.iter().any(|part| {
+                part.get("thought").and_then(Value::as_bool) != Some(true)
+                    && part.get("text").and_then(Value::as_str).is_some()
+            })
+        })
+    {
+        Ok(gemini_text(&value).unwrap_or_default())
+    } else {
+        Err(
+            "Gemini did not return a transcript. Check model access or try another recording."
+                .into(),
+        )
+    }
 }
 
 fn endpoint(base: &str, path: &str) -> String {
@@ -626,6 +702,61 @@ where
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gemini_audio_preserves_hints_and_response_excludes_thinking() {
+        use super::*;
+        let body = gemini_audio_body(
+            b"wav",
+            Some(&SpeechHints {
+                prompt: Some("Previous sentence".into()),
+                terms: vec!["OpenScribe".into()],
+            }),
+        );
+        assert_eq!(
+            body.pointer("/contents/0/parts/1/inlineData/data").unwrap(),
+            "d2F2"
+        );
+        assert_eq!(
+            body.pointer("/contents/0/parts/1/inlineData/mimeType")
+                .unwrap(),
+            "audio/wav"
+        );
+        let prompt = body
+            .pointer("/contents/0/parts/0/text")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert!(prompt.contains("Never translate"));
+        assert!(prompt.contains("Previous sentence"));
+        assert!(prompt.contains("OpenScribe"));
+        assert_eq!(
+            gemini_text(
+                &json!({"candidates":[{"content":{"parts":[{"thought":true,"text":"Reasoning"},{"text":"Hello "},{"text":"world"}]}}]})
+            ),
+            Some("Hello world".into())
+        );
+        assert_eq!(
+            gemini_text(&json!({"promptFeedback":{"blockReason":"SAFETY"}})),
+            None
+        );
+    }
+    #[test]
+    fn economical_writing_avoids_billed_reasoning_and_gemini_urls_have_no_key() {
+        use super::*;
+        let mut config = ProviderConfig {
+            provider: "openAI".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            model: "gpt-5.6-luna".into(),
+            credential_account: "test".into(),
+        };
+        let body = writing_body("Text", "Instructions", &config);
+        assert_eq!(body["reasoning_effort"], "none");
+        assert!(body.get("temperature").is_none());
+        assert_eq!(body["max_completion_tokens"], 8192);
+        config.base_url = "https://generativelanguage.googleapis.com/v1beta/".into();
+        config.model = "gemini-3.5-flash-lite".into();
+        assert_eq!(gemini_endpoint(&config), "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent");
+    }
     use super::*;
     #[test]
     fn each_piece_hears_the_words_before_it() {
@@ -636,11 +767,18 @@ mod tests {
         assert_eq!(with_context(Some(&glossary), " "), Some(glossary.clone()));
         assert_eq!(with_context(None, ""), None);
         let next = with_context(Some(&glossary), "We moved the index to Qdrant.").unwrap();
-        assert_eq!(next.prompt.as_deref(), Some("Qdrant, OpenScribe\n\nWe moved the index to Qdrant."));
+        assert_eq!(
+            next.prompt.as_deref(),
+            Some("Qdrant, OpenScribe\n\nWe moved the index to Qdrant.")
+        );
         assert_eq!(next.terms, glossary.terms);
         let long = format!("{} नमस्ते final words", "word ".repeat(200));
         let prompt = with_context(None, &long).unwrap().prompt.unwrap();
-        assert!(prompt.chars().count() <= CONTEXT_CHARACTERS, "{}", prompt.len());
+        assert!(
+            prompt.chars().count() <= CONTEXT_CHARACTERS,
+            "{}",
+            prompt.len()
+        );
         assert!(prompt.starts_with("word ") && prompt.ends_with("नमस्ते final words"));
     }
     #[test]

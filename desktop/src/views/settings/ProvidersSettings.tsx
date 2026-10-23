@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { ParitySettings } from "../../api/parityTypes";
-import { providerDefaults, providers } from "../../defaults";
+import { modelPresets, providerDefaults, providers } from "../../defaults";
 import { native, speechAccount, writingAccount } from "../../native";
 import type { AudioInput } from "../../types";
 import { keyProviderMismatch } from "./providerKeys";
@@ -17,6 +17,8 @@ export function ProviderForm({ purpose, settings, onUpdateSettings, onSaved }: {
   const [provider, setProvider] = useState(settings[providerKey]);
   const [baseURL, setBaseURL] = useState(settings[urlKey]);
   const [model, setModel] = useState(settings[modelKey]);
+  const [customModel, setCustomModel] = useState(!modelPresets(settings[providerKey], purpose).some(preset => preset.id === settings[modelKey]));
+  const presets = modelPresets(provider, purpose);
   const [secret, setSecret] = useState("");
   const [hasKey, setHasKey] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -53,12 +55,17 @@ export function ProviderForm({ purpose, settings, onUpdateSettings, onSaved }: {
   return <SettingsDialog title={purpose === "speech" ? "Transcription connection" : "Writing connection"} onClose={onSaved} busy={busy}>
     <form style={{ display: "flex", flexDirection: "column", gap: 16 }} onSubmit={event => { event.preventDefault(); void save(); }}>
       <fieldset disabled={busy} style={{ border: 0, padding: 0, display: "flex", flexDirection: "column", gap: 14 }}>
-        <label style={field}>Provider<select value={provider} onChange={event => { const id = event.target.value; const defaults = providerDefaults(id, purpose); setProvider(id); setBaseURL(defaults.baseUrl); setModel(defaults.model); }}>
+        <label style={field}>Provider<select value={provider} onChange={event => { const id = event.target.value; const defaults = providerDefaults(id, purpose); setProvider(id); setBaseURL(defaults.baseUrl); setModel(defaults.model); setCustomModel(id === "custom"); }}>
           {providers.filter(choice => purpose === "speech" ? choice.speechModel : choice.writingModel).map(choice => <option key={choice.id} value={choice.id}>{choice.title}</option>)}
         </select></label>
         <label style={field}>Base URL<input type="url" required value={baseURL} onChange={event => setBaseURL(event.target.value)} /></label>
-        <label style={field}>Model<input required value={model} onChange={event => setModel(event.target.value)} /></label>
-        {provider !== "custom" && <button type="button" onClick={() => setModel(providerDefaults(provider, purpose).model)}>Use default model preset</button>}
+        <label style={field}>Model<select value={customModel ? "custom" : model} onChange={event => { const value = event.target.value; setCustomModel(value === "custom"); if (value !== "custom") setModel(value); }}>
+          {presets.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}<option value="custom">Custom model…</option>
+        </select></label>
+        {customModel && <label style={field}>Custom model ID<input required value={model} onChange={event => setModel(event.target.value)} /></label>}
+        {provider !== "custom" && <button type="button" onClick={() => { setModel(providerDefaults(provider, purpose).model); setCustomModel(false); }}>Use economical preset</button>}
+        {provider === "google" && purpose === "speech" && <small>Gemini transcribes saved audio chunks; live partial text is unavailable. Your language and script are preserved.</small>}
+        {(provider === "google" || provider === "openAI") && <small>Economical defaults are selected for new connections. No automatic upgrade to a more expensive model. Prices and model access depend on the provider and account.</small>}
         <span>{checking ? "Checking saved keys..." : hasKey ? "A key is saved for this connection." : "API key required"}</span>
         <label style={field}>API key<input type="password" autoComplete="off" disabled={reuse} value={secret} onChange={event => setSecret(event.target.value)} placeholder={hasKey ? "Replacement key (optional)" : "Enter your key"} /></label>
         {otherHasKey && <label><input type="checkbox" checked={reuse} onChange={event => setReuse(event.target.checked)} />{purpose === "speech" ? "Use my saved writing key" : "Use my saved transcription key"}</label>}

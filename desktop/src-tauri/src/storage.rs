@@ -133,7 +133,7 @@ fn normalize_ids(value: &mut Value) {
 fn provider_defaults(provider: &str, speech: bool) -> (&'static str, &'static str) {
     match (provider, speech) {
         ("openAI", true) => ("https://api.openai.com/v1", "gpt-4o-mini-transcribe"),
-        ("openAI", false) => ("https://api.openai.com/v1", "gpt-4o-mini"),
+        ("openAI", false) => ("https://api.openai.com/v1", "gpt-5.6-luna"),
         ("groq", true) => ("https://api.groq.com/openai/v1", "whisper-large-v3-turbo"),
         ("groq", false) => ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
         ("deepgram", _) => ("https://api.deepgram.com/v1", "nova-3"),
@@ -145,7 +145,7 @@ fn provider_defaults(provider: &str, speech: bool) -> (&'static str, &'static st
         ("anthropic", _) => ("https://api.anthropic.com", "claude-3-5-haiku-latest"),
         ("google", _) => (
             "https://generativelanguage.googleapis.com",
-            "gemini-2.0-flash",
+            "gemini-3.5-flash-lite",
         ),
         ("custom", true) => ("https://example.com/v1", "whisper-1"),
         ("custom", false) => ("https://example.com/v1", "gpt-4o-mini"),
@@ -597,6 +597,14 @@ pub fn attachment_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn economical_provider_defaults_fill_missing_models_without_overwriting_selections() {
+        let settings: super::AppSettings = serde_json::from_value(serde_json::json!({"speechProvider":"google","languageModelProvider":"openAI"})).unwrap();
+        assert_eq!(settings.string("speechModel"), "gemini-3.5-flash-lite");
+        assert_eq!(settings.string("languageModel"), "gpt-5.6-luna");
+        let custom: super::AppSettings = serde_json::from_value(serde_json::json!({"speechProvider":"openAI","speechModel":"gpt-4o-transcribe"})).unwrap();
+        assert_eq!(custom.string("speechModel"), "gpt-4o-transcribe");
+    }
     use super::*;
     #[test]
     fn meetings_link_once_into_daily_notes_and_deletion_keeps_screenshots() {
