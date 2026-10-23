@@ -20,6 +20,35 @@ function fixture(patch: Partial<DictationDependencies> = {}) {
   return { controller: new DictationController(deps), deps, events };
 }
 describe("authoritative dictation lifecycle", () => {
+  it("uses a finalized stream immediately and persists it before cleanup", async () => {
+    const f = fixture({ stop: vi.fn(async () => ({ path: "test.wav", duration: 3, transcript: "Every streamed word." })) });
+    await f.controller.start(); await f.controller.finish();
+    expect(f.deps.transcribe).not.toHaveBeenCalled();
+    expect(f.deps.transform).toHaveBeenCalledWith("Every streamed word.", expect.anything());
+    expect(f.deps.persist).toHaveBeenCalledWith([expect.objectContaining({ rawText: "Every streamed word." })]);
+    expect(f.deps.save).toHaveBeenCalledWith(expect.objectContaining({ rawText: "Every streamed word." }));
+  });
+  it.each([null, "", "  "])("falls back to the full saved take without a complete streamed transcript (%s)", async transcript => {
+    const f = fixture({ stop: vi.fn(async () => ({ path: "test.wav", duration: 3, transcript })) });
+    await f.controller.start(); await f.controller.finish();
+    expect(f.deps.transcribe).toHaveBeenCalledWith("test.wav", expect.anything());
+  });
+  it("aborts the live socket on recording cancellation and ignores its final text", async () => {
+    const f = fixture({ stop: vi.fn(async () => ({ path: "test.wav", duration: 3, transcript: "Late final" })) });
+    await f.controller.start(); await f.controller.finish(true);
+    expect(f.deps.stop).toHaveBeenCalledWith(true);
+    expect(f.deps.transcribe).not.toHaveBeenCalled(); expect(f.deps.save).not.toHaveBeenCalled(); expect(f.deps.paste).not.toHaveBeenCalled();
+    expect(f.deps.persist).not.toHaveBeenCalled(); expect(f.deps.removeAudio).toHaveBeenCalledWith("test.wav");
+  });
+  it("never pastes a live result when Escape arrives during finalization", async () => {
+    let stopped!: (recording: { path: string; duration: number; transcript: string }) => void;
+    const f = fixture({ stop: () => new Promise(resolve => { stopped = resolve; }), cancelProcessing: vi.fn(async () => undefined) });
+    await f.controller.start(); const finishing = f.controller.finish();
+    await f.controller.finish(true); stopped({ path: "test.wav", duration: 3, transcript: "Late final" }); await finishing;
+    expect(f.deps.save).not.toHaveBeenCalled(); expect(f.deps.paste).not.toHaveBeenCalled(); expect(f.deps.transcribe).not.toHaveBeenCalled();
+    expect(f.deps.persist).not.toHaveBeenCalled(); expect(f.deps.removeAudio).toHaveBeenCalledWith("test.wav");
+    expect(f.controller.jobs).toEqual([]);
+  });
   it("plays the start cue once recording and the stop cue only for a kept recording", async () => {
     const cues: string[] = [];
     const f = fixture({ cue: cue => { cues.push(cue); f.events.push(`cue:${cue}`); } });
@@ -91,5 +120,15 @@ describe("authoritative dictation lifecycle", () => {
     const starting = f.controller.start(); await f.controller.finish(true); ready(); await starting;
     expect(f.deps.removeAudio).toHaveBeenCalledWith("test.wav");
     expect(f.deps.transcribe).not.toHaveBeenCalled(); expect(f.deps.save).not.toHaveBeenCalled();
+  });
+  it("keeps Escape cancellation when hold-to-talk is released before startup finishes", async () => {
+    let ready!: () => void;
+    const f = fixture({ start: () => new Promise<void>(resolve => { ready = resolve; }) });
+    const starting = f.controller.start();
+    await f.controller.finish(true); await f.controller.finish(); ready(); await starting;
+    expect(f.deps.stop).toHaveBeenCalledWith(true);
+    expect(f.deps.persist).not.toHaveBeenCalled(); expect(f.deps.save).not.toHaveBeenCalled();
+    expect(f.deps.transcribe).not.toHaveBeenCalled(); expect(f.deps.paste).not.toHaveBeenCalled();
+    expect(f.deps.removeAudio).toHaveBeenCalledWith("test.wav");
   });
 });

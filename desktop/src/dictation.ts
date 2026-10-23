@@ -5,7 +5,7 @@ export interface DictationJob { id: string; path: string; duration: number; crea
 export interface DictationDependencies {
   settings(): ParitySettings;
   start(device?: string): Promise<unknown>;
-  stop(): Promise<{ path: string; duration: number }>;
+  stop(cancel?: boolean): Promise<{ path: string; duration: number; transcript?: string | null }>;
   transcribe(path: string, settings: ParitySettings): Promise<string>;
   transform(text: string, settings: ParitySettings): Promise<string>;
   save(capture: NoteCapture): Promise<unknown>;
@@ -50,15 +50,16 @@ export class DictationController {
       await this.deps.cancelProcessing?.().catch(this.deps.error);
       return;
     }
-    if (this.phase === "starting") { this.pendingStop = true; this.pendingCancel = cancel; return; }
+    if (this.phase === "starting") { this.pendingStop = true; this.pendingCancel ||= cancel; return; }
     if (this.phase !== "recording") return;
     this.phase = "transcribing"; this.changed();
     try {
-      const recording = await this.deps.stop();
-      if (!cancel) this.deps.cue?.("stop");
-      if (cancel) { await this.deps.removeAudio(recording.path); this.deps.success?.("Cancelled"); return; }
-      const job: DictationJob = { ...recording, id: crypto.randomUUID().toUpperCase(), createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), ...(this.source ? { sourceApplication: this.source.name, sourceBundleIdentifier: this.source.id } : {}) };
+      const recording = await this.deps.stop(cancel);
+      if (cancel || this.processingCancelled) { await this.deps.removeAudio(recording.path); this.deps.success?.("Cancelled"); return; }
+      this.deps.cue?.("stop");
+      const job: DictationJob = { path: recording.path, duration: recording.duration, id: crypto.randomUUID().toUpperCase(), createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), ...(this.source ? { sourceApplication: this.source.name, sourceBundleIdentifier: this.source.id } : {}) };
       this.jobs.push(job);
+      if (recording.transcript?.trim()) job.rawText = recording.transcript;
       this.activeJob = job;
       await this.persist(); // Keep the recording recoverable before any provider request.
       await this.process(job);
@@ -91,6 +92,7 @@ export class DictationController {
     const old = this.jobs; this.jobs = this.jobs.filter(j => j.id !== job.id);
     try { await this.persist(); } catch (error) { this.jobs = old; throw error; }
     if (!settings.saveRawAudio) await this.deps.removeAudio(job.path).catch(this.deps.error);
+    if (this.processingCancelled) throw new Error("Cancelled");
     if (settings.pasteIntoFocusedApp) await this.deps.paste(text).catch(this.deps.error);
     this.deps.success?.("Saved");
   }

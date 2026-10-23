@@ -451,7 +451,7 @@ pub fn split_wav(path: &Path, seconds: u32) -> Result<Vec<PathBuf>, String> {
 /// Speech peaks are lifted toward this level (about −6 dBFS).
 const SPEECH_TARGET: f64 = 0.5;
 /// At most +20 dB, so a quiet laptop array becomes clear speech without room noise becoming loud.
-const MAX_SPEECH_GAIN: f64 = 10.0;
+pub(crate) const MAX_SPEECH_GAIN: f64 = 10.0;
 /// Below about −48 dBFS a take holds no speech worth lifting; amplifying it invites invented text.
 const SILENCE_LEVEL: f64 = 0.004;
 
@@ -487,14 +487,19 @@ pub fn speech_gain(path: &Path) -> Result<f64, String> {
             break;
         }
     }
+    Ok(gain_for_peak(peak))
+}
+
+pub(crate) fn gain_for_peak(peak: f64) -> f64 {
     if peak < SILENCE_LEVEL {
-        return Ok(1.0);
+        1.0
+    } else {
+        (SPEECH_TARGET / peak).clamp(1.0, MAX_SPEECH_GAIN)
     }
-    Ok((SPEECH_TARGET / peak).clamp(1.0, MAX_SPEECH_GAIN))
 }
 
 /// Applies gain, rounding off anything near full scale instead of clipping it.
-fn lift(sample: f64, gain: f64) -> f64 {
+pub(crate) fn lift(sample: f64, gain: f64) -> f64 {
     let value = sample * gain;
     let knee = 0.9;
     if value.abs() <= knee {
@@ -724,7 +729,11 @@ mod tests {
 
         let silent = dir.path().join("silent.wav");
         tone(&silent, 0.002, 3);
-        assert_eq!(speech_gain(&silent).unwrap(), 1.0, "silence is not amplified");
+        assert_eq!(
+            speech_gain(&silent).unwrap(),
+            1.0,
+            "silence is not amplified"
+        );
     }
     #[test]
     fn lifting_rounds_off_peaks_instead_of_clipping() {

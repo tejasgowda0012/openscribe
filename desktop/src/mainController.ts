@@ -10,6 +10,7 @@ import { CaptureSounds } from "./captureSounds";
 import { cleanupInstructions } from "./defaults";
 import { ListenerScope } from "./listeners";
 import { native } from "./native";
+import { stopLiveRecording, type DictationPartial } from "./liveDictation";
 import { DictationRecovery } from "./recovery";
 import { defaultParitySettings, normalizeSettings } from "./settings";
 import { expandSnippet } from "./text";
@@ -24,6 +25,8 @@ export interface MainState {
   noticeDetails?: boolean;
   /** Actions whose shortcut another app holds, as macOS reports them. */
   shortcutFailures: ShortcutAction[];
+  currentTranscript?: string;
+  captureHint?: string;
 }
 
 /** One instance lives in main, including while its window is hidden. */
@@ -43,14 +46,24 @@ export class MainController {
   private settingsWrites: Promise<unknown> = Promise.resolve();
   private notesRefresh = 0;
   private escapeActive = false;
+  private dictationPath?: string;
+  private pendingLive = new Map<string, DictationPartial>();
   readonly dictation = new DictationController({
     settings: () => this.state.settings,
     sourceApp: native.foregroundApp,
     cancelProcessing: native.cancelDictationWork,
     success: message => this.confirm(message),
     cue: cue => { if (this.state.settings.interactionSounds) this.sounds.play(cue); },
-    start: async device => { await this.busyUpdate; return native.startRecording(device); },
-    stop: native.stopRecording,
+    start: async device => {
+      await this.busyUpdate;
+      const path = await native.startRecording(device);
+      this.dictationPath = path;
+      const partial = this.pendingLive.get(path);
+      this.pendingLive.clear();
+      if (partial) this.patch({ currentTranscript: partial.text, captureHint: partial.hint });
+      return path;
+    },
+    stop: stopLiveRecording,
     // Native builds the complete provider hints from the persisted profile.
     transcribe: async (path, settings) => (await native.transcribe(path, settings)).text,
     transform: async (text, settings) => {
@@ -79,6 +92,10 @@ export class MainController {
     },
     persist: jobs => this.recovery.persist(jobs), removeAudio: native.deleteRecording, paste: native.paste,
     changed: (phase, recoveries) => {
+      if (phase === "starting" || phase === "idle") {
+        this.dictationPath = undefined; this.pendingLive.clear();
+        this.patch({ currentTranscript: "", captureHint: "" });
+      }
       this.patch({ phase, recoveries });
       // Serialize transitions so an older idle update cannot overtake a new start.
       this.busyUpdate = this.busyUpdate.catch(() => undefined).then(() => native.setDictationBusy(phase !== "idle"));
@@ -97,7 +114,8 @@ export class MainController {
   }
   private publish = () => emit("workspace://status", {
     phase: this.state.phase, settings: this.state.settings, activeMeeting: this.activeMeeting,
-    processingMeeting: this.meetingTransition || this.state.meetings.some(m => m.status === "transcribing" || m.status === "summarizing"), notice: this.state.notice
+    processingMeeting: this.meetingTransition || this.state.meetings.some(m => m.status === "transcribing" || m.status === "summarizing"), notice: this.state.notice,
+    currentTranscript: this.state.currentTranscript, captureHint: this.state.captureHint
   } satisfies WorkspaceStatus);
   /** As on macOS, a meeting plays the start cue once when it begins recording, not on resume. */
   private cueMeeting(record: MeetingRecord) {
@@ -131,6 +149,15 @@ export class MainController {
     add(api.parityEvents.onCalendarError(this.error));
     add(listen<string>("app://error", event => this.error(event.payload)));
     add(listen<string>("capture://error", event => this.error(event.payload)));
+    add(listen<DictationPartial>("dictation://partial", ({ payload }) => {
+      if (this.dictation.phase === "starting") {
+        // Setup can emit before start_recording returns its path. Never show a previous take.
+        if (this.pendingLive.size >= 8) this.pendingLive.clear();
+        this.pendingLive.set(payload.path, payload);
+      } else if (payload.path === this.dictationPath && (this.dictation.phase === "recording" || this.dictation.phase === "transcribing")) {
+        this.patch({ currentTranscript: payload.text, captureHint: payload.hint });
+      }
+    }));
     add(api.parityEvents.onShortcutAction(({ action, state }) => {
       if (!this.ready || !shortcutActions.includes(action as ShortcutAction)) return;
       const phase = this.dictation.phase;

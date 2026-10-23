@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { AppSettings, AudioInput } from "./types";
 import type { ParitySettings } from "./api/parityTypes";
 
@@ -37,13 +36,7 @@ export const native = {
   hasCredential: (account: string) => invoke<boolean>("has_credential", { account }),
   copyCredential: (from: string, to: string) => invoke<void>("copy_credential", { from, to }),
   removeCredential: (account: string) => invoke<void>("remove_credential", { account }),
-  async paste(text: string) {
-    const previous = await readText().catch(() => "");
-    await writeText(text);
-    await invoke("paste_keystroke");
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    if ((await readText().catch(() => "")) === text) await writeText(previous);
-  }
+  paste: (text: string) => invoke<void>("paste_text", { text })
 };
 
 export function friendlyError(error: unknown): string {

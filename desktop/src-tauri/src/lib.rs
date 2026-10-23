@@ -15,6 +15,7 @@ pub mod notes;
 pub mod ocr;
 mod platform;
 pub mod provider;
+mod realtime;
 pub mod region_select;
 pub mod screenshot;
 pub mod shortcuts;
@@ -32,6 +33,7 @@ use tauri::{Emitter, Manager};
 struct RecordingResult {
     path: String,
     duration: f64,
+    transcript: Option<String>,
 }
 
 #[tauri::command]
@@ -61,11 +63,24 @@ fn start_recording(
 }
 
 #[tauri::command]
-fn stop_recording(state: tauri::State<audio::RecorderState>) -> Result<RecordingResult, String> {
-    let (path, duration) = audio::stop(&state)?;
+async fn stop_recording(
+    app: tauri::AppHandle,
+    cancel: Option<bool>,
+) -> Result<RecordingResult, String> {
+    let recorder_app = app.clone();
+    let (path, duration, live) = tauri::async_runtime::spawn_blocking(move || {
+        audio::stop(&recorder_app.state::<audio::RecorderState>())
+    })
+    .await
+    .map_err(|_| "The recorder stopped unexpectedly.".to_string())??;
+    let transcript = match live {
+        Some(live) => live.finish(cancel.unwrap_or(false)).await,
+        None => None,
+    };
     Ok(RecordingResult {
         path: path.to_string_lossy().to_string(),
         duration,
+        transcript,
     })
 }
 
@@ -157,6 +172,26 @@ fn paste_keystroke() -> Result<(), String> {
     platform::paste_keystroke()
 }
 
+/// Pastes dictated text into the focused app and gives the clipboard back afterwards.
+#[tauri::command]
+async fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = app;
+        tauri::async_runtime::spawn_blocking(move || platform::paste_text(&text))
+            .await
+            .map_err(|error| error.to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        app.clipboard()
+            .write_text(text)
+            .map_err(|error| error.to_string())?;
+        platform::paste_keystroke()
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -207,6 +242,7 @@ pub fn run() {
             transcribe_recording,
             clean_transcript,
             paste_keystroke,
+            paste_text,
             storage::load_profile,
             storage::save_settings,
             storage::save_note,

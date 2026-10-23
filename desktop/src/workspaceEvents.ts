@@ -10,7 +10,7 @@ export type WorkspaceIntent =
   | { action: "screenshot"; kind: "area" | "window" | "screen" }
   | { action: "placement"; placement: FlowbarPlacement }
   | { action: "open"; section?: "notes" | "meetings" | "settings"; meetingId?: string };
-export interface WorkspaceStatus { phase: DictationPhase; settings: ParitySettings; activeMeeting: MeetingRecord | null; processingMeeting: boolean; notice: string | null }
+export interface WorkspaceStatus { phase: DictationPhase; settings: ParitySettings; activeMeeting: MeetingRecord | null; processingMeeting: boolean; notice: string | null; currentTranscript?: string; captureHint?: string }
 export const sendIntent = (intent: WorkspaceIntent) => emitTo("main", "workspace://intent", intent);
 export const reportUiError = (error: unknown) => {
   const message = String(error);

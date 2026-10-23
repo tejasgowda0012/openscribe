@@ -70,6 +70,8 @@ export const FlowbarApp: React.FC = () => {
   const [now, setNow] = useState(Date.now);
   const [processingMeeting, setProcessingMeeting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [currentTranscript, setCurrentTranscript] = useState("");
+  const [captureHint, setCaptureHint] = useState("");
   const [confirmation, setConfirmation] = useState<string | null>(null);
   const [shortMeeting, setShortMeeting] = useState<MeetingRecord | null>(null);
   const [menu, setMenu] = useState<"main" | "position" | "screenshot" | null>(null);
@@ -83,7 +85,8 @@ export const FlowbarApp: React.FC = () => {
   const expanded = hovering || focused || !!menu;
   const mode = deriveMode(phase, !!activeMeeting, processingMeeting, confirmation, expanded);
   const length = modeLength(mode, expanded), thickness = mode === "idle" ? 6 : 32;
-  const hasCompanion = !!notice || !!shortMeeting || !!menu;
+  const showTranscript = phase !== "idle" && !!captureHint;
+  const hasCompanion = !!notice || !!shortMeeting || !!menu || showTranscript;
   const { dock, pillCenter: center, companion, onPointerDown, onClickCapture, placeCompanionWindow, width: windowWidth, height: windowHeight } = useFlowbarWindow(settings, length, hasCompanion ? companionSize : null);
   const pillCenter = pillAnchor(center, dock, thickness);
   const vertical = dock !== "none";
@@ -110,6 +113,7 @@ export const FlowbarApp: React.FC = () => {
       const status = event.payload;
       setSettings(status.settings); setPhase(status.phase); setActiveMeeting(status.activeMeeting);
       setProcessingMeeting(status.processingMeeting); setNotice(status.notice);
+      setCurrentTranscript(status.currentTranscript ?? ""); setCaptureHint(status.captureHint ?? "");
       if (status.phase === "starting" || status.activeMeeting) setConfirmation(null);
     }).then(unlisten => { void emitTo("main", "workspace://request-state").catch(reportUiError); return unlisten; }), reportUiError);
     scope.add(listen<{ message: string }>("workspace://confirmation", event => {
@@ -149,7 +153,7 @@ export const FlowbarApp: React.FC = () => {
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element); return () => observer.disconnect();
-  }, [hasCompanion, menu, notice, shortMeeting]);
+  }, [hasCompanion, menu, notice, shortMeeting, currentTranscript, captureHint]);
   useEffect(() => {
     if (menu) menuElement.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [menu]);
@@ -269,9 +273,13 @@ export const FlowbarApp: React.FC = () => {
           ? <div key={entry.id} role="separator" style={{ height: 1, background: "var(--os-flowbar-line)", margin: "3px 2px" }} />
           : <FlowbarMenuItem key={entry.id} checked={entry.checked} destructive={entry.destructive} submenu={entry.id === "position"}
             onClick={() => { if (entry.id === "position") setMenu("position"); else if (entry.id === "meeting-notes") void openMeetingNotes(); else if (entry.intent) send(entry.intent); }}>{entry.label}</FlowbarMenuItem>)}
-      </div> : <NoticeBubble notice={notice} isError shortMeeting={shortMeeting}
+      </div> : <><NoticeBubble notice={notice} isError shortMeeting={shortMeeting}
         onDismissNotice={() => send({ action: "dismissNotice" })} onInspectNotice={() => send({ action: "inspectNotice" })}
-        onResolveShortMeeting={action => { void resolveShort(action); }} />}
+        onResolveShortMeeting={action => { void resolveShort(action); }} />
+        {showTranscript && <div role="status" aria-live="polite" style={{ width: "100%", boxSizing: "border-box", padding: 12, borderRadius: 10, background: "var(--os-flowbar)", color: "var(--os-flowbar-ink)", border: "1px solid var(--os-flowbar-line)", boxShadow: "var(--os-flowbar-shadow)" }}>
+          <div style={{ fontSize: 11, opacity: 0.7 }}>{captureHint}</div>
+          {currentTranscript && <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5, maxHeight: 150, overflowY: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{currentTranscript}</div>}
+        </div>}</>}
     </div>}
   </div>;
 };

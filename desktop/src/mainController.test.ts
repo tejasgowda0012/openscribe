@@ -47,6 +47,37 @@ beforeEach(() => {
 });
 
 describe("main window integration", () => {
+  it("passes a finalized live transcript through dictionary and save without batch upload", async () => {
+    const original = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, args) => command === "stop_recording"
+      ? Promise.resolve({ path: "Recovery/current.wav", duration: 2, transcript: "Live final words." }) : original(command, args));
+    const app = new MainController(); await app.initialize();
+    await app.intent({ action: "dictate" }); await app.intent({ action: "dictate" });
+    expect(calls("stop_recording")[0][1]).toEqual({ cancel: false });
+    expect(calls("transcribe_recording")).toHaveLength(0);
+    expect(calls("apply_dictionary")[0][1].text).toBe("Live final words.");
+    expect(calls("add_capture")[0][1].capture.rawText).toBe("Live final words.");
+    expect(app.state.recoveries).toEqual([]);
+  });
+  it("shows only the active take's live transcript, including setup events before startup returns", async () => {
+    const original = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation(async (command, args) => {
+      if (command === "start_recording") {
+        fire("dictation://partial", { path: "Recovery/current.wav", text: "Live words", hint: "Streaming transcription" });
+        return "Recovery/current.wav";
+      }
+      return original(command, args);
+    });
+    const app = new MainController(); await app.initialize(); await app.startDictation();
+    expect(app.state.currentTranscript).toBe("Live words"); expect(app.state.captureHint).toBe("Streaming transcription");
+    fire("dictation://partial", { path: "Recovery/older.wav", text: "Stale words", hint: "Streaming transcription" });
+    expect(app.state.currentTranscript).toBe("Live words");
+    fire("dictation://partial", { path: "Recovery/current.wav", text: "", hint: "" });
+    expect(app.state.captureHint).toBe(""); expect(app.state.currentTranscript).toBe("");
+    await app.dictation.finish(true);
+    fire("dictation://partial", { path: "Recovery/current.wav", text: "Too late", hint: "Streaming transcription" });
+    expect(app.state.currentTranscript).toBe(""); expect(app.state.captureHint).toBe("");
+  });
   it("acknowledges a taught correction only after settings persist, and reports save failure", async () => {
     const app = new MainController(); await app.initialize();
     fire("workspace://teach-correction", { requestId: "one", heard: "open scribe", replacement: "OpenScribe" });
@@ -93,6 +124,8 @@ describe("main window integration", () => {
     expect(app.dictation.phase).toBe("idle");
     expect(calls("set_escape_active").map(call => call[1])).toEqual([{ active: true }, { active: false }]);
     expect(calls("transcribe_recording")).toHaveLength(0);
+    expect(calls("stop_recording")[0][1]).toEqual({ cancel: true });
+    expect(calls("add_capture")).toHaveLength(0);
   });
 
   it("finishes a hold released during microphone startup through the same controller", async () => {

@@ -23,6 +23,7 @@ pub struct ActiveRecording {
     pub started: Instant,
     stop: mpsc::Sender<()>,
     thread: thread::JoinHandle<Result<(), String>>,
+    live: Option<crate::realtime::LiveSession>,
 }
 
 #[derive(Default)]
@@ -73,10 +74,14 @@ pub fn start(
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     let path = directory.join(format!("{}.wav", crate::apple_time::Id::default()));
     let thread_path = path.clone();
+    let (sink, live) = match crate::realtime::LiveSession::start(&app, &path) {
+        Some((sink, live)) => (Some(sink), Some(live)),
+        None => (None, None),
+    };
     let (stop_tx, stop_rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
     let thread = thread::spawn(move || {
-        let result = record(thread_path, device_id, stop_rx, &ready_tx, app);
+        let result = record(thread_path, device_id, stop_rx, &ready_tx, app, sink);
         if let Err(error) = &result {
             let _ = ready_tx.send(Err(error.clone()));
         }
@@ -89,6 +94,7 @@ pub fn start(
                 started: Instant::now(),
                 stop: stop_tx,
                 thread,
+                live,
             });
             Ok(path)
         }
@@ -104,7 +110,9 @@ pub fn start(
     }
 }
 
-pub fn stop(state: &RecorderState) -> Result<(PathBuf, f64), String> {
+pub fn stop(
+    state: &RecorderState,
+) -> Result<(PathBuf, f64, Option<crate::realtime::LiveSession>), String> {
     let mut guard = state
         .0
         .lock()
@@ -118,7 +126,7 @@ pub fn stop(state: &RecorderState) -> Result<(PathBuf, f64), String> {
         .thread
         .join()
         .map_err(|_| "The recorder stopped unexpectedly.".to_string())??;
-    Ok((active.path, duration))
+    Ok((active.path, duration, active.live))
 }
 
 /// Build both real WASAPI clients without playing streams or writing audio.
@@ -179,6 +187,7 @@ fn record(
     stop: mpsc::Receiver<()>,
     ready: &mpsc::Sender<Result<(), String>>,
     app: tauri::AppHandle,
+    live: Option<crate::realtime::LiveSink>,
 ) -> Result<(), String> {
     let host = cpal::default_host();
     let device = if let Some(id) = device_id.filter(|value| !value.is_empty()) {
@@ -211,15 +220,30 @@ fn record(
     let level = Arc::new(Mutex::new(0.0_f32));
     let config = supported.config();
     let stream = match supported.sample_format() {
-        cpal::SampleFormat::F32 => {
-            build_stream::<f32>(&device, &config, writer.clone(), on_error, level.clone())
-        }
-        cpal::SampleFormat::I16 => {
-            build_stream::<i16>(&device, &config, writer.clone(), on_error, level.clone())
-        }
-        cpal::SampleFormat::U16 => {
-            build_stream::<u16>(&device, &config, writer.clone(), on_error, level.clone())
-        }
+        cpal::SampleFormat::F32 => build_stream::<f32>(
+            &device,
+            &config,
+            writer.clone(),
+            on_error,
+            level.clone(),
+            live,
+        ),
+        cpal::SampleFormat::I16 => build_stream::<i16>(
+            &device,
+            &config,
+            writer.clone(),
+            on_error,
+            level.clone(),
+            live,
+        ),
+        cpal::SampleFormat::U16 => build_stream::<u16>(
+            &device,
+            &config,
+            writer.clone(),
+            on_error,
+            level.clone(),
+            live,
+        ),
         format => Err(format!("Unsupported audio sample format: {format:?}")),
     }?;
     stream.play().map_err(|error| error.to_string())?;
@@ -270,10 +294,13 @@ fn build_stream<T>(
     writer: Arc<Mutex<Option<hound::WavWriter<BufWriter<File>>>>>,
     on_error: impl FnMut(cpal::StreamError) + Send + 'static,
     level: Arc<Mutex<f32>>,
+    live: Option<crate::realtime::LiveSink>,
 ) -> Result<cpal::Stream, String>
 where
     T: cpal::SizedSample + ToI16,
 {
+    let rate = config.sample_rate.0;
+    let channels = config.channels;
     device
         .build_input_stream(
             config,
@@ -281,6 +308,9 @@ where
                 let pcm: Vec<i16> = samples.iter().map(|s| (*s).to_i16()).collect();
                 if let Ok(mut meter) = level.lock() {
                     *meter = crate::meeting_audio::meter_level(&pcm);
+                }
+                if let Some(sink) = &live {
+                    sink.append(pcm, rate, channels);
                 }
                 if let Ok(mut guard) = writer.lock() {
                     if let Some(writer) = guard.as_mut() {
