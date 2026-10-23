@@ -450,7 +450,7 @@ export default function App() {
 
         {/* Active Section View */}
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'grid', gridTemplateRows: '1fr', gridTemplateColumns: '1fr', position: 'relative' }}>
-          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'notes' ? 'flex' : 'none' }}>
+          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'notes' ? 'block' : 'none' }}>
             <NotesView
               active={section === 'notes'}
               notes={notes}
@@ -467,7 +467,7 @@ export default function App() {
             />
           </div>
 
-          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'meetings' ? 'flex' : 'none' }}>
+          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'meetings' ? 'block' : 'none' }}>
             <MeetingsView
               meetings={meetings}
               activeMeetingId={activeMeetingId}
@@ -479,7 +479,7 @@ export default function App() {
             />
           </div>
 
-          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'calendar' ? 'flex' : 'none' }}>
+          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'calendar' ? 'block' : 'none' }}>
             <SettingsView
               key='calendar'
               initialSection='calendar'
@@ -492,7 +492,7 @@ export default function App() {
             />
           </div>
 
-          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'settings' ? 'flex' : 'none' }}>
+          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'settings' ? 'block' : 'none' }}>
             <SettingsView
               key='settings'
               hideNavigation
