@@ -104,7 +104,7 @@ export function ProvidersSettings({ settings, onUpdateSettings }: { settings: Pa
   const [error, setError] = useState("");
   const update = (next: ParitySettings) => { void Promise.resolve().then(() => onUpdateSettings(next)).then(() => setError("")).catch(failure => setError(String(failure))); };
   const toggle = (key: "meetingMicrophone" | "meetingSystemAudio" | "meetingSummarize" | "meetingLiveTranscription" | "dictationLiveTranscription" | "cleanupEnabled" | "saveRawAudio", title: string) => <label style={{ display: "flex", justifyContent: "space-between" }} key={key}>{title}<input type="checkbox" checked={settings[key]} onChange={event => update({ ...settings, [key]: event.target.checked })} /></label>;
-  return <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 700 }}>
+  return <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
     <ProviderConnectionCard purpose="speech" settings={settings} onUpdateSettings={onUpdateSettings} />
     <ProviderConnectionCard purpose="writing" settings={settings} onUpdateSettings={onUpdateSettings} />
     <small>Each connection has its own model. Connections to the same provider and endpoint can reuse a saved key.</small>

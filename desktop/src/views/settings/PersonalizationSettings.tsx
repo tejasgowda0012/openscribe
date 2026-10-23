@@ -16,7 +16,7 @@ export function PersonalizationSettings({ settings, onUpdateSettings }: { settin
   const remove = (title: string, next: ParitySettings) => { setError(""); setDeleting({ title, next }); };
   const hintDetail = speechHintDetail(settings.speechProvider, settings.speechModel);
   const toggle = (key: "speechHints" | "spokenCorrections" | "learnSpelledWords", title: string) => <label style={{ display: "flex", justifyContent: "space-between", gap: 20 }}>{title}<input type="checkbox" disabled={busy || (key === "speechHints" && !hintDetail) || (key === "learnSpelledWords" && !settings.spokenCorrections)} checked={settings[key]} onChange={event => { void persist({ ...settings, [key]: event.target.checked }); }} /></label>;
-  return <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 760 }}>
+  return <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
     <div role="tablist" aria-label="Personalization" style={{ display: "flex", gap: 10 }}>{([ ["dictionary", "Dictionary"], ["snippets", "Snippets"], ["apps", "App styles"], ["smart", "Smart corrections"] ] as const).map(([id, title]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{title}</button>)}</div>
     {tab === "dictionary" && <>
       <section style={box}><h3>Vocabulary</h3><p>{settings.customVocabulary.join(", ") || "Add names and terminology you want OpenScribe to recognize."}</p><button onClick={() => edit("vocabulary", "", settings.customVocabulary.join(", "))}>Edit vocabulary...</button></section>

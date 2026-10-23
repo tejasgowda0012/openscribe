@@ -14,7 +14,7 @@ export function PermissionsView({ onReadinessChange, onOpenCalendar }: Permissio
   }, [onReadinessChange]);
   useEffect(() => { void refresh(); const focus = () => { void refresh(); }; window.addEventListener("focus", focus); return () => window.removeEventListener("focus", focus); }, [refresh]);
   const open = async (section: "microphone" | "sound") => { try { await settingsNative.openWindowsSettings(section); } catch (failure) { setError(String(failure)); } };
-  return <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 700 }}>
+  return <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
     <p>Windows controls microphone privacy for desktop apps. System audio uses the output device; it does not need the macOS Screen Recording permission. Pasting uses Windows input and can be blocked by elevated apps.</p>
     {([ ["microphone", "Microphone"], ["paste", "Paste into other apps"], ["systemAudio", "System audio"], ["calendar", "Calendar sources"] ] as const).map(([key, title]) => <section key={key} style={settingsBox}>
       <strong>{title}</strong><span role="status">{readiness ? readiness[key].ready ? key === "calendar" ? "Sources configured" : "Ready" : key === "calendar" ? "No sources configured" : "Needs attention" : "Not checked"}</span>

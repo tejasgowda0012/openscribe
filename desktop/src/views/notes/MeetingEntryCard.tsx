@@ -15,7 +15,7 @@ export function MeetingEntryCard({ entry, onOpen }: { entry: NoteCapture; onOpen
     return () => { disposed = true; void subscription.then(unlisten => unlisten()).catch(reportUiError); };
   }, [entry.meetingID]);
   const active = record?.status === "recording" || record?.status === "paused";
-  return <div style={{ border: "1px solid var(--os-line)", borderRadius: 10, padding: 12, maxWidth: 520 }}>
+  return <div style={{ border: "1px solid var(--os-line)", borderRadius: 10, padding: 12 }}>
     <button disabled={!entry.meetingID || !onOpen} onClick={() => onOpen?.(entry.meetingID!)} style={{ border: 0, padding: 0, width: "100%", textAlign: "left", background: "transparent", color: "var(--os-ink)" }}>
       <strong>{record?.title || entry.title || "Meeting"}</strong> <span style={{ color: "var(--os-ink-muted)" }}>{record?.status ?? "Meeting unavailable"}</span>
       <p>{record?.summary?.overview[0]?.text || record?.userNotes || ""}</p>
