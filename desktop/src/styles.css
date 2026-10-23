@@ -177,3 +177,20 @@ h1, h2 { font-family: Georgia, "Palatino Linotype", serif; }.page-header h1 { ma
 .onboarding>footer { display:flex; width:min(690px,90%); margin:auto; }.onboarding>footer>span { flex:1; }
 .boot { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; background:var(--paper); color:var(--muted); font-size:10px; letter-spacing:.3px; }.boot .wave-mark { animation:float 1.7s ease-in-out infinite; }@keyframes float{50%{transform:translateY(-5px)}}
 @media(max-width:1000px){.settings-grid{grid-template-columns:1fr}.app-shell{grid-template-columns:205px 1fr}.page{padding-left:28px;padding-right:28px}}
+
+/* Buttons without their own styling get a proper control shape, as FlowButtonStyle gives them on macOS. */
+button:where(:not([class]):not([style])), .os-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--os-line); border-radius: 8px; font-size: 13px; font-weight: 500; line-height: 1.25; white-space: nowrap; }
+.os-button.small { padding: 5px 9px; font-size: 12px; }
+.os-button.full { flex: 1; width: 100%; min-width: 0; }
+.os-button.primary { border-color: transparent; background: var(--os-accent); color: var(--os-primary-text); font-weight: 600; }
+.os-button.primary:not(:disabled):hover { box-shadow: inset 0 0 0 999px rgb(255 255 255 / 0.1) !important; }
+
+.capture-dock { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--os-line); border-radius: 13px; background: color-mix(in srgb, var(--os-surface) 75%, transparent); }
+.capture-dock.recording { border-color: color-mix(in srgb, var(--os-recording) 40%, transparent); }
+.capture-dock-row { display: flex; gap: 6px; min-width: 0; }
+.capture-dock-meter { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.capture-dock-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--os-recording); flex-shrink: 0; }
+.capture-dock-time { margin-left: auto; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--os-ink-muted); }
+.capture-dock-status { flex: 1; font-size: 12px; font-weight: 500; color: var(--os-ink-muted); }
+.capture-dock-hint { font-size: 11px; font-weight: 500; opacity: 0.75; overflow: hidden; text-overflow: ellipsis; }
+.menu-item { display: block; width: 100%; padding: 6px 8px; border-radius: 6px; background: transparent; text-align: left; font-size: 13px; }

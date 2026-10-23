@@ -498,8 +498,8 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({
                 <div style={{ position: "relative" }} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setExportMenu(false); }}>
                   <button aria-expanded={exportMenu} onClick={() => setExportMenu(value => !value)}>Export ▾</button>
                   {exportMenu && <div style={{ position: "absolute", right: 0, top: 30, zIndex: 60, padding: 8, background: "var(--os-surface)", border: "1px solid var(--os-line)", borderRadius: 8, minWidth: 190 }}>
-                    <button onClick={() => { setExportMenu(false); run((async () => { const text = await currentMarkdown(); await exportText(text, selectedRecord.title, "md"); })()); }}>Export as Markdown…</button>
-                    <button onClick={() => { setExportMenu(false); void handleExportMarkdown(); }}>Copy Markdown</button>
+                    <button className="menu-item" onClick={() => { setExportMenu(false); run((async () => { const text = await currentMarkdown(); await exportText(text, selectedRecord.title, "md"); })()); }}>Export as Markdown…</button>
+                    <button className="menu-item" onClick={() => { setExportMenu(false); void handleExportMarkdown(); }}>Copy Markdown</button>
                   </div>}
                 </div>
                 <input

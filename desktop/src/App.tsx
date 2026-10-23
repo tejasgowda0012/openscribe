@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Window } from "@tauri-apps/api/window";
-import { AlertTriangle, CalendarDays, FileAudio, Library, Settings, Users, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, Command, FileAudio, Library, ListPlus, LockKeyhole, Network, ShieldCheck, SlidersHorizontal, Users, X } from "lucide-react";
 import { mainController } from "./mainController";
 import { dictationHint } from "./core/shortcuts";
 import { MeetingsView } from "./views/meetings/MeetingsView";
@@ -214,11 +214,10 @@ export default function App() {
 
         <div style={{ fontSize: 10, color: "var(--os-ink-muted)", margin: "10px 6px 6px" }}>SETTINGS</div>
         <nav aria-label="Settings" style={{ display: "grid", gap: 2 }}>
-          {([ ["general", "General"], ["shortcuts", "Shortcuts"], ["providers", "API & Models"], ["personalize", "Personalization"], ["privacy", "Privacy"], ["permissions", "Permissions"] ] as const).map(([id, label]) => <button key={id} aria-current={section === "settings" && settingsSection === id ? "page" : undefined} onClick={() => { setSettingsSection(id); setSection("settings"); }} style={{ textAlign: "left", padding: "7px 10px", border: "none", borderRadius: 7, color: "inherit", background: section === "settings" && settingsSection === id ? "var(--os-surface-hover)" : "transparent" }}><Settings size={13} style={{ marginRight: 8 }} />{label}</button>)}
+          {([ ["general", "General", SlidersHorizontal], ["shortcuts", "Shortcuts", Command], ["providers", "API & Models", Network], ["personalize", "Personalization", ListPlus], ["privacy", "Privacy", LockKeyhole], ["permissions", "Permissions", ShieldCheck] ] as const).map(([id, label, Icon]) => { const current = section === "settings" && settingsSection === id; return <button key={id} aria-current={current ? "page" : undefined} onClick={() => { setSettingsSection(id); setSection("settings"); }} style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left", padding: "7px 10px", border: "none", borderRadius: 7, fontSize: 13, fontWeight: current ? 600 : 500, color: current ? "color-mix(in srgb, var(--os-accent) 90%, var(--os-ink))" : "inherit", background: current ? "var(--os-surface-hover)" : "transparent" }}><Icon size={16} />{label}</button>; })}
         </nav>
         <div style={{ flex: 1, minHeight: 12 }} />
-        {!settings.hasCompletedSetup && <button style={{ marginBottom: 10 }} onClick={() => setSetup(true)}>Finish setup</button>}
-        <CaptureDock phase={phase} meeting={mainController.activeMeeting} hint={hint} />
+        <CaptureDock phase={phase} meeting={mainController.activeMeeting} hint={hint} needsSetup={!settings.hasCompletedSetup} onSetup={() => setSetup(true)} />
       </aside>
 
       {/* Main Workspace Column */}
