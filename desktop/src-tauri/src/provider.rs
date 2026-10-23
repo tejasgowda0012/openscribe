@@ -35,6 +35,33 @@ pub static TRANSCRIPT_FILTER: std::sync::OnceLock<
 pub fn hints_for_settings(settings: &crate::storage::AppSettings) -> Option<SpeechHints> {
     SPEECH_HINT_FACTORY.get().map(|factory| factory(settings))
 }
+/// The end of the preceding transcript given to the next piece; speech models read about this much.
+const CONTEXT_CHARACTERS: usize = 400;
+
+/// Speech hints followed by the end of what was already transcribed, as speech models expect.
+pub(crate) fn with_context(hints: Option<&SpeechHints>, previous: &str) -> Option<SpeechHints> {
+    let previous = previous.trim();
+    if previous.is_empty() {
+        return hints.cloned();
+    }
+    let start = previous
+        .char_indices()
+        .rev()
+        .nth(CONTEXT_CHARACTERS - 1)
+        .map_or(0, |(index, _)| index);
+    // Start on a word, not part of one.
+    let tail = match previous[start..].split_once(char::is_whitespace) {
+        Some((_, rest)) if start > 0 => rest.trim_start(),
+        _ => &previous[start..],
+    };
+    let mut hints = hints.cloned().unwrap_or_default();
+    hints.prompt = Some(match hints.prompt.as_deref().map(str::trim) {
+        Some(prompt) if !prompt.is_empty() => format!("{prompt}\n\n{tail}"),
+        _ => tail.to_string(),
+    });
+    Some(hints)
+}
+
 /// Matches the macOS recorder's chunk length.
 const DICTATION_CHUNK_SECONDS: u32 = 15;
 
@@ -53,10 +80,12 @@ pub async fn transcribe(
     })
     .await
     .map_err(|_| "Could not prepare the audio upload.".to_string())??;
-    let mut texts = Vec::new();
+    let mut texts: Vec<String> = Vec::new();
     let mut failure = None;
     for part in &parts {
-        match transcribe_reliably(part, config, hints).await {
+        // Each piece hears the words before it, so a sentence across the cut keeps its wording.
+        let hints = with_context(hints, &texts.join(" "));
+        match transcribe_reliably(part, config, hints.as_ref()).await {
             Ok(result) if !result.text.is_empty() => texts.push(result.text),
             Ok(_) => {}
             Err(error) => {
@@ -598,6 +627,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn each_piece_hears_the_words_before_it() {
+        let glossary = SpeechHints {
+            prompt: Some("Qdrant, OpenScribe".into()),
+            terms: vec!["Qdrant".into()],
+        };
+        assert_eq!(with_context(Some(&glossary), " "), Some(glossary.clone()));
+        assert_eq!(with_context(None, ""), None);
+        let next = with_context(Some(&glossary), "We moved the index to Qdrant.").unwrap();
+        assert_eq!(next.prompt.as_deref(), Some("Qdrant, OpenScribe\n\nWe moved the index to Qdrant."));
+        assert_eq!(next.terms, glossary.terms);
+        let long = format!("{} नमस्ते final words", "word ".repeat(200));
+        let prompt = with_context(None, &long).unwrap().prompt.unwrap();
+        assert!(prompt.chars().count() <= CONTEXT_CHARACTERS, "{}", prompt.len());
+        assert!(prompt.starts_with("word ") && prompt.ends_with("नमस्ते final words"));
+    }
     #[test]
     fn silence_is_a_successful_meeting_section_but_dictation_reports_no_speech() {
         assert_eq!(transcription_result(" \n", true).unwrap().text, "");

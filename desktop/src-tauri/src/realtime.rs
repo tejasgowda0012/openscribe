@@ -383,6 +383,57 @@ impl Pcm16 {
     }
 }
 
+/// Decides when a turn is committed for transcription. Cutting at a fixed interval splits words
+/// and leaves each piece without the sentence around it, so a turn ends at a pause instead.
+#[derive(Default)]
+struct Pause {
+    /// The loudest 100 ms packet in the current turn.
+    loudest: f64,
+    /// Bytes of quiet audio at the end of the current turn.
+    quiet: usize,
+}
+impl Pause {
+    /// A turn shorter than this is held back, so a breath between words never ends a sentence.
+    const SHORTEST_SECONDS: usize = 3;
+    /// A turn is committed regardless at this length, so text keeps arriving during long speech.
+    const LONGEST_SECONDS: usize = 15;
+    /// About the length of a pause between sentences.
+    const PAUSE_MILLISECONDS: usize = 400;
+    /// Quiet relative to the loudest speech in the turn.
+    const QUIET_FRACTION: f64 = 0.15;
+
+    /// Records one packet of 16-bit audio and reports whether the turn should be committed now.
+    fn observe(&mut self, packet: &[u8], pending: usize, rate: u32) -> bool {
+        let samples = packet.len() / 2;
+        let level = if samples == 0 {
+            0.0
+        } else {
+            let sum = packet
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| f64::from(i16::from_le_bytes(*b)) / 32768.0)
+                .map(|s| s * s)
+                .sum::<f64>();
+            (sum / samples as f64).sqrt()
+        };
+        self.loudest = self.loudest.max(level);
+        if level < self.loudest * Self::QUIET_FRACTION {
+            self.quiet += packet.len();
+        } else {
+            self.quiet = 0;
+        }
+        let second = rate as usize * 2;
+        let commit = pending >= second * Self::LONGEST_SECONDS
+            || (pending >= second * Self::SHORTEST_SECONDS
+                && self.quiet >= second * Self::PAUSE_MILLISECONDS / 1000);
+        if commit {
+            *self = Self::default();
+        }
+        commit
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct LiveSink {
     tx: mpsc::Sender<Audio>,
@@ -593,6 +644,7 @@ async fn exchange(
     let mut converter = Pcm16::default();
     let mut pending = Vec::new();
     let mut pending_bytes = 0;
+    let mut pause = Pause::default();
     let mut commits = 0;
     let mut ended = false;
     let mut last_text = String::new();
@@ -614,7 +666,7 @@ async fn exchange(
                         Transport::OpenAi => {
                             send_json(&mut socket, json!({"type":"input_audio_buffer.append","audio":BASE64.encode(&bytes)})).await?;
                             pending_bytes += bytes.len();
-                            if !["gpt-live-transcribe", "gpt-realtime-whisper"].contains(&capability.model.as_str()) && pending_bytes >= 96000 {
+                            if !["gpt-live-transcribe", "gpt-realtime-whisper"].contains(&capability.model.as_str()) && pause.observe(&bytes, pending_bytes, capability.rate) {
                                 send_json(&mut socket, json!({"type":"input_audio_buffer.commit"})).await?;
                                 commits += 1; pending_bytes = 0;
                             }
@@ -656,6 +708,40 @@ async fn exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turns_end_at_a_pause_not_mid_word() {
+        let packet = |level: i16| level.to_le_bytes().repeat(2400);
+        let (speech, quiet) = (packet(4000), packet(100));
+        let mut pause = Pause::default();
+        let mut pending = 0;
+        let mut feed = |pause: &mut Pause, bytes: &[u8]| {
+            pending += bytes.len();
+            let commit = pause.observe(bytes, pending, 24000);
+            if commit {
+                pending = 0;
+            }
+            commit
+        };
+        // A short breath inside the first seconds never ends the turn.
+        for _ in 0..10 {
+            assert!(!feed(&mut pause, &speech));
+        }
+        for _ in 0..5 {
+            assert!(!feed(&mut pause, &quiet));
+        }
+        for _ in 0..20 {
+            assert!(!feed(&mut pause, &speech));
+        }
+        // After three seconds, 400 ms of quiet ends it.
+        for _ in 0..3 {
+            assert!(!feed(&mut pause, &quiet));
+        }
+        assert!(feed(&mut pause, &quiet));
+        // Unbroken speech is still committed at fifteen seconds.
+        assert!((0..149).all(|_| !feed(&mut pause, &speech)));
+        assert!(feed(&mut pause, &speech));
+    }
 
     fn config(provider: &str, base: &str, model: &str) -> crate::provider::ProviderConfig {
         crate::provider::ProviderConfig {
@@ -1012,7 +1098,8 @@ mod tests {
                             .unwrap();
                     }
                     if commits == 2 {
-                        assert_eq!(bytes, 103200);
+                        // Four seconds of speech, a pause, then the rest: the first turn ends in the pause.
+                        assert_eq!(bytes, 240000);
                         break;
                     }
                 }
@@ -1034,13 +1121,15 @@ mod tests {
                 let _ = partial_tx.send(text.to_owned());
             },
         ));
-        tx.send(Audio {
-            samples: vec![1200; 48000 * 215 / 100 * 2],
-            rate: 48000,
-            channels: 2,
-        })
-        .await
-        .unwrap();
+        for samples in [vec![1200; 48000 * 4 * 2], vec![0; 48000], vec![1200; 48000]] {
+            tx.send(Audio {
+                samples,
+                rate: 48000,
+                channels: 2,
+            })
+            .await
+            .unwrap();
+        }
         let partial = tokio::time::timeout(Duration::from_secs(5), partial_rx.recv())
             .await
             .unwrap()

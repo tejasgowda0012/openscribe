@@ -7,7 +7,7 @@ import { pasteLastText } from "./core/dailyNotes";
 import { shortcutActions, ShortcutInterpreter, shortcutTitles, type ShortcutAction, validateBindings } from "./core/shortcuts";
 import { DictationController, type DictationJob, type DictationPhase } from "./dictation";
 import { CaptureSounds } from "./captureSounds";
-import { cleanupInstructions } from "./defaults";
+import { cleanupInstruction } from "./defaults";
 import { ListenerScope } from "./listeners";
 import { native } from "./native";
 import { stopLiveRecording, type DictationPartial } from "./liveDictation";
@@ -76,7 +76,7 @@ export class MainController {
       if (!settings.cleanupEnabled) return result.text;
       let cleaned: string;
       try {
-        cleaned = (await native.clean(result.text, settings, `${cleanupInstructions[settings.cleanupStrength]}\nUse a ${settings.writingTone} tone. Return only the revised text.`)).text;
+        cleaned = (await native.clean(result.text, settings, cleanupInstruction(settings))).text;
       } catch (error) {
         if (String(error).toLowerCase().includes("cancelled")) throw error;
         // As on macOS, a cleanup failure keeps the transcript instead of holding the dictation back.

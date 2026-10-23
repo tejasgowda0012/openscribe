@@ -52,3 +52,20 @@ export const cleanupInstructions = {
   clear: "Remove filler words, false starts and accidental repetition. Resolve spoken corrections. Preserve every substantive detail.",
   concise: "Remove fillers and tighten redundant phrasing. Preserve every fact, number, qualification, uncertainty and negation."
 };
+
+/** Prompt for the dictation cleanup model. Light cleanup keeps the speaker's tone. */
+export function cleanupInstruction(settings: Pick<AppSettings, "cleanupStrength" | "writingTone" | "customVocabulary">): string {
+  const lines = [cleanupInstructions[settings.cleanupStrength]];
+  if (settings.cleanupStrength !== "light") lines.push(`Use a ${settings.writingTone} tone.`);
+  lines.push(
+    "Correct words the speech recognizer clearly misheard when the surrounding sentence makes the intended word obvious, without inventing content.",
+    "Keep the speaker's language and script exactly as spoken. Never translate: romanised Hindi stays romanised, Devanagari stays Devanagari, and mixed Hindi-English stays mixed.",
+    "Fix sentence boundaries and punctuation."
+  );
+  const terms = settings.customVocabulary.map(term => term.trim()).filter(term => term.length > 0);
+  if (terms.length > 0) {
+    lines.push(`The speaker's dictionary: ${terms.join(", ")}. Always spell these exactly as listed. If a word in the transcript is clearly a mis-hearing of one of them (it sounds alike and fits the context), use the dictionary spelling. Leave ordinary words that merely resemble an entry alone.`);
+  }
+  lines.push("Return only the revised text.");
+  return lines.join("\n");
+}

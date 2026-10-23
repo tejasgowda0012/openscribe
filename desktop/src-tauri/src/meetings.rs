@@ -729,6 +729,31 @@ async fn cancelled<T>(
     }
     tokio::select! {result=future=>result,_=async{while !token.load(Ordering::SeqCst){tokio::time::sleep(std::time::Duration::from_millis(50)).await;}}=>Err("Processing stopped. Completed sections are saved; you can resume.".into())}
 }
+fn previous_track_text(segments: &[MeetingSegment], track: &str, start: f64) -> String {
+    let mut previous: Vec<_> = segments
+        .iter()
+        .filter(|s| s.track == track && s.start < start)
+        .collect();
+    previous.sort_by(|a, b| segment_order(a, b));
+    previous[previous.len().saturating_sub(2)..]
+        .iter()
+        .map(|s| s.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+struct ChunkAudio {
+    original: PathBuf,
+    parts: Vec<PathBuf>,
+}
+impl Drop for ChunkAudio {
+    fn drop(&mut self) {
+        // Keep the recording, even when upload fails or its future is cancelled.
+        for part in self.parts.iter().filter(|part| *part != &self.original) {
+            let _ = fs::remove_file(part);
+        }
+    }
+}
 async fn transcribe_chunk(
     app: &tauri::AppHandle,
     id: Id,
@@ -740,21 +765,43 @@ async fn transcribe_chunk(
         if record.segments.iter().any(|s| s.id == chunk.id) {
             return Ok(None);
         }
-        Ok(Some((c.store.audio_path(id, &chunk.id)?, record.settings)))
+        let previous = previous_track_text(&record.segments, &chunk.track, chunk.start);
+        Ok(Some((
+            c.store.audio_path(id, &chunk.id)?,
+            record.settings,
+            previous,
+        )))
     })?;
-    let Some((path, settings)) = config else {
+    let Some((path, settings, previous)) = config else {
         return Ok(());
     };
     let hints = crate::provider::hints_for_settings(&settings);
+    // Carry sentences across chunk boundaries without mixing the two tracks.
+    let hints = crate::provider::with_context(hints.as_ref(), &previous);
+    let audio = tokio::task::spawn_blocking(move || {
+        // Lift quiet speech in a copy; an hour keeps each short chunk in one part.
+        let gain = crate::meeting_audio::speech_gain(&path).unwrap_or(1.0);
+        let parts = if gain > 1.0 {
+            crate::meeting_audio::split_wav_with_gain(&path, 3600, gain)?
+        } else {
+            vec![path.clone()]
+        };
+        // Own cleanup here too, in case the waiting future is dropped.
+        Ok::<_, String>(ChunkAudio {
+            original: path,
+            parts,
+        })
+    })
+    .await
+    .map_err(|_| "Could not prepare the audio upload.".to_string())??;
+    let path = audio.parts.first().unwrap_or(&audio.original);
     let result = cancelled(
         cancel,
-        crate::provider::transcribe_reliably(
-            &path,
-            &settings.provider_config(true),
-            hints.as_ref(),
-        ),
+        crate::provider::transcribe_reliably(path, &settings.provider_config(true), hints.as_ref()),
     )
-    .await?;
+    .await;
+    drop(audio);
+    let result = result?;
     if cancel.load(Ordering::SeqCst) {
         return Err("Processing stopped. Completed sections are saved; you can resume.".into());
     }
@@ -1096,6 +1143,51 @@ mod tests {
             busy: None,
             cancel: Arc::new(AtomicBool::new(false)),
         }
+    }
+    #[test]
+    fn chunk_context_uses_latest_two_earlier_segments_from_same_track() {
+        let segment = |track: &str, start: f64, text: &str| MeetingSegment {
+            track: track.into(),
+            start,
+            text: text.into(),
+            ..MeetingSegment::default()
+        };
+        let segments = vec![
+            segment("microphone", 45.0, "current"),
+            segment("microphone", 30.0, " second "),
+            segment("system", 40.0, "other track"),
+            segment("microphone", 0.0, "oldest"),
+            segment("microphone", 60.0, "future"),
+            segment("microphone", 15.0, " first "),
+        ];
+        assert_eq!(
+            previous_track_text(&segments, "microphone", 45.0),
+            "first second"
+        );
+        assert_eq!(previous_track_text(&segments, "microphone", 15.0), "oldest");
+        assert_eq!(
+            previous_track_text(&segments, "system", 45.0),
+            "other track"
+        );
+        assert_eq!(previous_track_text(&segments, "microphone", 0.0), "");
+        assert_eq!(previous_track_text(&[], "microphone", 45.0), "");
+    }
+    #[test]
+    fn chunk_audio_cleanup_removes_parts_and_preserves_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("chunk.wav");
+        let part1 = dir.path().join("chunk-part1.wav");
+        let part2 = dir.path().join("chunk-part2.wav");
+        fs::write(&original, b"original").unwrap();
+        fs::write(&part1, b"lifted").unwrap();
+        fs::write(&part2, b"lifted").unwrap();
+        drop(ChunkAudio {
+            original: original.clone(),
+            parts: vec![original.clone(), part1.clone(), part2.clone()],
+        });
+        assert_eq!(fs::read(&original).unwrap(), b"original");
+        assert!(!part1.exists());
+        assert!(!part2.exists());
     }
     #[test]
     fn capture_status_exposes_only_recording_or_paused_actual_id_and_processing_busy() {

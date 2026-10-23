@@ -16,6 +16,7 @@ vi.mock("@tauri-apps/api/window", () => ({ Window: { getByLabel: vi.fn(async () 
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ readText: vi.fn(async () => ""), writeText: vi.fn(async () => undefined) }));
 vi.mock("@tauri-apps/plugin-store", () => ({ load: mocks.load }));
 
+import { cleanupInstruction } from "./defaults";
 import { MainController } from "./mainController";
 import { defaultParitySettings, normalizeSettings } from "./settings";
 import { defaultBindings } from "./core/shortcuts";
@@ -43,6 +44,38 @@ beforeEach(() => {
     if (command === "apply_dictionary") return { text: "corrected text", learnedWords: [] };
     if (command === "clean_transcript") return { text: "Cleaned text." };
     if (command === "add_capture") return { ...note, captures: [args.capture], cleanedText: args.capture.text };
+  });
+});
+
+describe("cleanupInstruction", () => {
+  const settings = { ...defaultParitySettings, customVocabulary: [] as string[] };
+
+  it("omits the tone instruction when strength is light", () => {
+    const light = cleanupInstruction({ ...settings, cleanupStrength: "light", writingTone: "formal" });
+    expect(light).not.toMatch(/Use a \w+ tone/);
+    expect(light).not.toContain("formal");
+    expect(cleanupInstruction({ ...settings, cleanupStrength: "clear", writingTone: "casual" })).toContain("Use a casual tone.");
+    expect(cleanupInstruction({ ...settings, cleanupStrength: "concise", writingTone: "formal" })).toContain("Use a formal tone.");
+  });
+
+  it("includes the speaker's dictionary only when it has terms", () => {
+    expect(cleanupInstruction({ ...settings, customVocabulary: [] })).not.toContain("speaker's dictionary");
+    expect(cleanupInstruction({ ...settings, customVocabulary: [" ", ""] })).not.toContain("speaker's dictionary");
+    const filled = cleanupInstruction({ ...settings, customVocabulary: ["OpenScribe", "Mahakrushi"] });
+    expect(filled).toContain("The speaker's dictionary: OpenScribe, Mahakrushi.");
+    expect(filled).toContain("Always spell these exactly as listed.");
+    expect(filled).toContain("Leave ordinary words that merely resemble an entry alone.");
+  });
+
+  it("keeps the speaker's language and script for every strength", () => {
+    for (const cleanupStrength of ["light", "clear", "concise"] as const) {
+      const text = cleanupInstruction({ ...settings, cleanupStrength });
+      expect(text).toContain("Keep the speaker's language and script exactly as spoken.");
+      expect(text).toContain("Never translate: romanised Hindi stays romanised, Devanagari stays Devanagari, and mixed Hindi-English stays mixed.");
+      expect(text).toContain("clearly misheard");
+      expect(text).toContain("without inventing content");
+      expect(text).toContain("Fix sentence boundaries and punctuation.");
+    }
   });
 });
 
@@ -150,6 +183,7 @@ describe("main window integration", () => {
     const app = new MainController(); await app.initialize(); await app.intent({ action: "dictate" }); await app.intent({ action: "dictate" });
     expect(calls("transcribe_recording")[0][1]).toEqual({ path: "Recovery/test.wav", config: { provider: "openRouter", baseUrl: "https://openrouter.ai/api/v1", model: "mistralai/voxtral-mini-transcribe", credentialAccount: "speech:openRouter:https://openrouter.ai/api/v1" } });
     expect(calls("clean_transcript")[0][1].text).toBe("corrected text");
+    expect(calls("clean_transcript")[0][1].instruction).toBe(cleanupInstruction({ cleanupStrength: "clear", writingTone: "natural", customVocabulary: [] }));
     expect(app.state.settings.customVocabulary).toContain("OpenScribe");
     expect(app.state.notes[0].captures?.[0].text).toBe("Cleaned text.");
     const commands = mocks.invoke.mock.calls.map(([name]) => name);
