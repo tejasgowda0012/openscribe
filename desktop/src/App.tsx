@@ -14,6 +14,7 @@ import { SettingsView } from "./views/settings/SettingsView";
 import type { ParitySettings } from "./api/parityTypes";
 import { useAppliedTheme } from "./theme";
 import { ConfirmDialog } from "./views/ConfirmDialog";
+import { matchWorkspaceShortcut } from './core/inAppShortcuts';
 export { defaultParitySettings } from "./settings";
 
 export default function App() {
@@ -23,6 +24,21 @@ export default function App() {
   const hint = dictationHint(settings.shortcuts ?? {}, shortcutFailures);
   const [section, setSection] = useState<"notes" | "meetings" | "calendar" | "settings">("notes");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const action = matchWorkspaceShortcut(event);
+      if (!action) return;
+      event.preventDefault();
+      if (action.type === 'navigate') {
+        setSection(action.section);
+      } else if (action.type === 'openSettings') {
+        setSettingsSection('general');
+        setSection('settings');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
   const [setup, setSetup] = useState(false);
   const [detailCopied, setDetailCopied] = useState(false);
   const [selectedNoteId, setSelectedNoteId] = useState("today-placeholder");
@@ -433,24 +449,25 @@ export default function App() {
         </div>
 
         {/* Active Section View */}
-        <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
-          {section === "notes" && (
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'grid', gridTemplateRows: '1fr', gridTemplateColumns: '1fr', position: 'relative' }}>
+          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'notes' ? 'flex' : 'none' }}>
             <NotesView
+              active={section === 'notes'}
               notes={notes}
               selectedId={selectedNoteId}
               onSelectNote={setSelectedNoteId}
               onUpdateNotes={setNotes}
               onRefreshNotes={() => mainController.refreshNotes()}
               onOpenMeeting={(meetingId) => {
-                setSection("meetings");
+                setSection('meetings');
                 setSelectedMeetingId(meetingId);
               }}
               onStartDictation={handleStartDictation}
               onStartMeeting={handleStartMeetingFromDock}
             />
-          )}
+          </div>
 
-          {section === "meetings" && (
+          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'meetings' ? 'flex' : 'none' }}>
             <MeetingsView
               meetings={meetings}
               activeMeetingId={activeMeetingId}
@@ -460,12 +477,12 @@ export default function App() {
               onUpdateMeetings={setMeetings}
               onUpdateSettings={handleUpdateSettings}
             />
-          )}
+          </div>
 
-          {section === "calendar" && (
+          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'calendar' ? 'flex' : 'none' }}>
             <SettingsView
-              key="calendar"
-              initialSection="calendar"
+              key='calendar'
+              initialSection='calendar'
               inputs={inputs}
               settings={settings}
               calendarEvents={calendarEvents}
@@ -473,14 +490,14 @@ export default function App() {
               onRefreshCalendar={() => { void mainController.refreshCalendar().catch(mainController.error); }}
               onRevealFlowbar={handleRevealFlowbar}
             />
-          )}
+          </div>
 
-          {section === "settings" && (
+          <div style={{ gridArea: '1 / 1 / 2 / 2', width: '100%', height: '100%', overflow: 'hidden', display: section === 'settings' ? 'flex' : 'none' }}>
             <SettingsView
-              key="settings"
+              key='settings'
               hideNavigation
               selectedSection={settingsSection}
-              onSectionChange={next => { if (next === "calendar") setSection("calendar"); else setSettingsSection(next); }}
+              onSectionChange={next => { if (next === 'calendar') setSection('calendar'); else setSettingsSection(next); }}
               notesCount={notes.length}
               meetingsCount={meetings.length}
               inputs={inputs}
@@ -491,7 +508,7 @@ export default function App() {
               onClearNotesHistory={() => { void mainController.clearNotes().catch(mainController.error); }}
               onRevealFlowbar={handleRevealFlowbar}
             />
-          )}
+          </div>
         </div>
       </main>
     </div>

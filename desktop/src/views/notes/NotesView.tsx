@@ -19,6 +19,7 @@ import { LibraryContextMenu } from "./LibraryContextMenu";
 import { editNoteText, noteListing, notePreview, noteText, noteTitle, visibleCaptures } from "./libraryHelpers";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { isSyntheticDayId, selectedDayNote } from "./dayNoteHelpers";
+import { matchNotesShortcut } from '../../core/inAppShortcuts';
 
 interface NotesViewProps {
   notes: VoiceNote[];
@@ -29,6 +30,7 @@ interface NotesViewProps {
   onOpenMeeting?: (meetingId: string) => void;
   onStartDictation?: () => void;
   onStartMeeting?: () => void;
+  active?: boolean;
 }
 
 export const NotesView: React.FC<NotesViewProps> = ({
@@ -39,7 +41,8 @@ export const NotesView: React.FC<NotesViewProps> = ({
   onRefreshNotes,
   onOpenMeeting,
   onStartDictation,
-  onStartMeeting
+  onStartMeeting,
+  active = true
 }) => {
   const [search, setSearch] = useState("");
   const searchInput = useRef<HTMLInputElement>(null);
@@ -159,14 +162,27 @@ export const NotesView: React.FC<NotesViewProps> = ({
     (selectedNote.captures != null && localDay(selectedNote.createdAt) === todayStr);
 
   useEffect(() => {
+    if (!active) return;
     const handler = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || event.altKey || event.shiftKey || document.querySelector('[aria-modal="true"]')) return;
-      if (event.key.toLowerCase() === "n") { event.preventDefault(); handleCreateWrittenNote(); }
-      if (event.key.toLowerCase() === "f") { event.preventDefault(); searchInput.current?.focus(); }
-      if (event.key.toLowerCase() === "t") { event.preventDefault(); onSelectNote(todayNote.id); }
+      const action = matchNotesShortcut(event, { isNotesVisible: active });
+      if (!action) return;
+      event.preventDefault();
+      switch (action.type) {
+        case 'newNote':
+          handleCreateWrittenNote();
+          break;
+        case 'searchNotes':
+          searchInput.current?.focus();
+          searchInput.current?.select();
+          break;
+        case 'todayNote':
+          onSelectNote(todayNote.id);
+          break;
+      }
     };
-    window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler);
-  }, [todayNote.id, onSelectNote]);
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [active, todayNote.id, onSelectNote]);
 
   return (
     <div style={{ display: "flex", width: "100%", height: "100%", overflow: "hidden" }}>
