@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { cometSlices, livePath, logoWavePath, VoiceFollower } from "./FlowbarSquiggle";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { cometSlices, FlowbarSquiggle, livePath, logoWavePath, VoiceFollower } from "./FlowbarSquiggle";
 
 describe("Flowbar squiggle", () => {
+  it("rotates the wave within a swapped SVG viewport when docked, without clipping its length", () => {
+    const markup = renderToStaticMarkup(createElement(FlowbarSquiggle, { width: 64, height: 20, vertical: true }));
+    expect(markup).toContain('width="20" height="64" viewBox="0 0 20 64"');
+    expect(markup).toContain('transform="translate(20, 0) rotate(90)"');
+    expect(markup).toContain('aria-hidden="true"');
+  });
   it("draws the logo wave across the full width", () => {
     const path = logoWavePath(0, 0, 40, 16);
     expect(path.startsWith("M 0 8")).toBe(true);

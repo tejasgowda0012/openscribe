@@ -8,6 +8,7 @@ interface FlowbarSquiggleProps {
   color?: string;
   width?: number;
   height?: number;
+  vertical?: boolean;
 }
 
 const lineWidth = 2;
@@ -91,7 +92,8 @@ export const FlowbarSquiggle: React.FC<FlowbarSquiggleProps> = ({
   motion = "still",
   color = "var(--os-flowbar-ink)",
   width = 40,
-  height = 16
+  height = 16,
+  vertical = false
 }) => {
   const target = useRef(level); target.current = level;
   const follower = useRef(new VoiceFollower());
@@ -113,7 +115,8 @@ export const FlowbarSquiggle: React.FC<FlowbarSquiggleProps> = ({
   const inset = lineWidth / 2;
   const wave = logoWavePath(inset, inset + 1, width - lineWidth, height - lineWidth - 2);
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: "block", overflow: "visible" }} aria-hidden="true">
+    <svg width={vertical ? height : width} height={vertical ? width : height} viewBox={`0 0 ${vertical ? height : width} ${vertical ? width : height}`} style={{ display: "block", overflow: "visible" }} aria-hidden="true">
+      <g transform={vertical ? `translate(${height}, 0) rotate(90)` : undefined}>
       {motion === "still" && <path d={wave} {...stroke} />}
       {motion === "live" && <path d={livePath(width, height, follower.current.phase, delay => follower.current.level(delay))} {...stroke} />}
       {motion === "flowing" && <>
@@ -123,6 +126,7 @@ export const FlowbarSquiggle: React.FC<FlowbarSquiggleProps> = ({
             strokeDasharray={`${to - from} 2`} strokeDashoffset={-from} />
         ))}
       </>}
+      </g>
     </svg>
   );
 };

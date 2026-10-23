@@ -110,9 +110,9 @@ export function companionOrigin(
       oy = beside.y - size.height / 2;
       break;
     case "none": {
-      const belowFits = beside.y + half + gap + size.height < maxY;
+      const aboveFits = beside.y - half - gap - size.height > minY;
       ox = beside.x - size.width / 2;
-      oy = belowFits ? beside.y + half + gap : beside.y - half - gap - size.height;
+      oy = aboveFits ? beside.y - half - gap - size.height : beside.y + half + gap;
       break;
     }
   }
@@ -129,7 +129,7 @@ export function restoreAnchor(
   overlayPosition: string | undefined,
   visible: ScreenRect
 ): { anchor: Point; dock: FlowbarDock } {
-  if (placement && typeof placement.x === "number" && typeof placement.y === "number") {
+  if (placement && Number.isFinite(placement.x) && Number.isFinite(placement.y)) {
     const dock = (placement.edge === "left" || placement.edge === "right") ? placement.edge : "none";
     const raw = {
       x: visible.x + placement.x * visible.width,
@@ -169,4 +169,51 @@ export function restoreAnchor(
     anchor: snapPoint(anchor, visible, "none"),
     dock: "none"
   };
+}
+
+export interface Size { width: number; height: number }
+
+/** A docked sliver hugs the same edge as the full-height pill. */
+export function pillAnchor(anchor: Point, dock: FlowbarDock, thickness: number): Point {
+  const offset = (FlowbarLayout.pillHeight - thickness) / 2;
+  return { x: anchor.x + (dock === "left" ? -offset : dock === "right" ? offset : 0), y: anchor.y };
+}
+
+/** Fit one transparent native window around the pill and its companion, inside the work area. */
+export function flowbarFrame(anchor: Point, dock: FlowbarDock, length: number, companion: Size | null, visible: ScreenRect) {
+  const width = dock === "none" ? length + 20 : 52;
+  const height = dock === "none" ? 52 : length + 20;
+  const bubble = companion ? companionOrigin(anchor, dock, companion, 4, visible) : null;
+  const left = Math.min(anchor.x - width / 2, bubble?.x ?? Infinity);
+  const top = Math.min(anchor.y - height / 2, bubble?.y ?? Infinity);
+  const right = Math.max(anchor.x + width / 2, bubble ? bubble.x + companion!.width : -Infinity);
+  const bottom = Math.max(anchor.y + height / 2, bubble ? bubble.y + companion!.height : -Infinity);
+  const w = Math.min(visible.width, Math.ceil(right - left));
+  const h = Math.min(visible.height, Math.ceil(bottom - top));
+  const x = Math.round(Math.max(visible.x, Math.min(left, visible.x + visible.width - w)));
+  const y = Math.round(Math.max(visible.y, Math.min(top, visible.y + visible.height - h)));
+  return {
+    x, y, width: w, height: h,
+    pillCenter: { x: anchor.x - x, y: anchor.y - y },
+    companion: bubble ? { x: bubble.x - x, y: bubble.y - y } : null
+  };
+}
+
+export interface DisplayGeometry { position: Point; size: Size; scaleFactor: number; workArea: { position: Point; size: Size } }
+
+/** Use physical desktop coordinates until a monitor is selected; DPI scales differ between displays. */
+export function displayAt<T extends DisplayGeometry>(displays: T[], point: Point): T | undefined {
+  return displays.find(m => point.x >= m.position.x && point.x < m.position.x + m.size.width &&
+    point.y >= m.position.y && point.y < m.position.y + m.size.height);
+}
+
+export function visibleArea(monitor: DisplayGeometry): ScreenRect {
+  return { x: monitor.workArea.position.x / monitor.scaleFactor, y: monitor.workArea.position.y / monitor.scaleFactor,
+    width: monitor.workArea.size.width / monitor.scaleFactor, height: monitor.workArea.size.height / monitor.scaleFactor };
+}
+
+/** Preserve the grab offset in logical pixels when crossing between different display DPIs. */
+export function draggedAnchor(initial: Point, firstCursor: Point, initialScale: number, cursor: Point, scale: number): Point {
+  return { x: cursor.x / scale - (firstCursor.x / initialScale - initial.x),
+    y: cursor.y / scale - (firstCursor.y / initialScale - initial.y) };
 }

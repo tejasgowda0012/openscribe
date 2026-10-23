@@ -1,83 +1,143 @@
 import { useEffect, useRef, useState } from "react";
-import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
-import { availableMonitors, currentMonitor, getCurrentWindow, type Monitor } from "@tauri-apps/api/window";
+import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
+import { availableMonitors, cursorPosition, getCurrentWindow, type Monitor, type Window } from "@tauri-apps/api/window";
 import type { ParitySettings } from "../api/parityTypes";
 import { reportUiError, sendIntent } from "../workspaceEvents";
-import { detectDock, restoreAnchor, snapPoint, type Point, type ScreenRect, type FlowbarDock } from "./placement";
+import { companionOrigin, detectDock, displayAt, draggedAnchor, flowbarFrame, restoreAnchor, snapPoint, visibleArea, type Point, type Size, type FlowbarDock } from "./placement";
 
-const visibleArea = (monitor: Monitor): ScreenRect => ({
-  x: monitor.workArea.position.x / monitor.scaleFactor, y: monitor.workArea.position.y / monitor.scaleFactor,
-  width: monitor.workArea.size.width / monitor.scaleFactor, height: monitor.workArea.size.height / monitor.scaleFactor
-});
-
-/** Keep a stable pill anchor while the native window grows to fit its menus/notices. */
-export function useFlowbarWindow(settings: ParitySettings | null, width: number, height: number, rotateWithDock = true) {
+/** Keep a stable anchor while modes animate and companions expand the native window. */
+export function useFlowbarWindow(settings: ParitySettings | null, length: number, companion: Size | null) {
   const [dock, setDock] = useState<FlowbarDock>("none");
-  const actualWidth = rotateWithDock && dock !== "none" ? height : width;
-  const actualHeight = rotateWithDock && dock !== "none" ? width : height;
-  const [pillCenter, setPillCenter] = useState<Point>({ x: width / 2, y: height / 2 });
+  const [frame, setFrame] = useState(() => flowbarFrame({ x: 100, y: 100 }, "none", length, null, { x: 0, y: 0, width: 1920, height: 1080 }));
   const anchor = useRef<Point | null>(null);
   const monitorRef = useRef<Monitor | null>(null);
-  const dimensions = useRef({ width: actualWidth, height: actualHeight }); dimensions.current = { width: actualWidth, height: actualHeight };
-  const placementKey = JSON.stringify([settings?.flowbarPlacement, settings?.overlayPosition]);
+  const dockRef = useRef<FlowbarDock>("none");
+  const settingsRef = useRef(settings); settingsRef.current = settings;
+  const layoutRef = useRef({ length, companion }); layoutRef.current = { length, companion };
   const cleanupDrag = useRef<() => void>(() => undefined);
-  const generation = useRef(0);
-
-  const position = async (monitor: Monitor, point: Point) => {
-    const scale = monitor.scaleFactor, visible = visibleArea(monitor);
-    const { width: w, height: h } = dimensions.current;
-    const x = Math.max(visible.x, Math.min(point.x - w / 2, visible.x + visible.width - w));
-    const y = Math.max(visible.y, Math.min(point.y - h / 2, visible.y + visible.height - h));
-    await getCurrentWindow().setSize(new LogicalSize(w, h));
-    await getCurrentWindow().setPosition(new PhysicalPosition(Math.round(x * scale), Math.round(y * scale)));
-    setPillCenter({ x: point.x - x, y: point.y - y });
+  const dragging = useRef(false);
+  const suppressClick = useRef(false);
+  const placementKey = JSON.stringify([settings?.flowbarPlacement, settings?.overlayPosition]);
+  // Serialize mutations so an older resize cannot overtake a newer drag/layout.
+  const mutations = useRef<Promise<unknown>>(Promise.resolve());
+  const position = (monitor: Monitor, point: Point, nextDock = dockRef.current, nativeLength = layoutRef.current.length) => {
+    const next = flowbarFrame(point, nextDock, nativeLength, layoutRef.current.companion, visibleArea(monitor));
+    mutations.current = mutations.current.catch(() => undefined).then(async () => {
+      const win = getCurrentWindow(), scale = monitor.scaleFactor;
+      // Move before sizing: Windows may apply a DPI resize while crossing displays.
+      await win.setPosition(new PhysicalPosition(Math.round(next.x * scale), Math.round(next.y * scale)));
+      await win.setSize(new PhysicalSize(Math.round(next.width * scale), Math.round(next.height * scale)));
+      setFrame(next);
+    });
+    return mutations.current;
   };
+  const changeDock = (next: FlowbarDock) => { dockRef.current = next; setDock(next); };
 
   useEffect(() => {
     if (!settings) return;
-    const request = ++generation.current;
-    void (async () => {
+    let disposed = false, topology = "";
+    const restore = async () => {
       const monitors = await availableMonitors();
-      const monitor = monitors.find(m => m.name === settings.flowbarPlacement?.screen) ?? await currentMonitor() ?? monitors[0];
-      if (!monitor || request !== generation.current) return;
+      const signature = JSON.stringify(monitors);
+      if (disposed || dragging.current || signature === topology) return;
+      const current = settingsRef.current;
+      if (!current) return;
+      const cursor = await cursorPosition();
+      if (disposed) return;
+      const monitor = monitors.find(m => m.name === current.flowbarPlacement?.screen) ?? displayAt(monitors, cursor) ?? monitors[0];
+      if (!monitor) return;
+      topology = signature;
       monitorRef.current = monitor;
-      const restored = restoreAnchor(settings.flowbarPlacement, settings.overlayPosition, visibleArea(monitor));
-      anchor.current = restored.anchor; setDock(restored.dock);
-      await position(monitor, restored.anchor);
-    })().catch(reportUiError);
-    return () => { generation.current++; };
+      const restored = restoreAnchor(current.flowbarPlacement, current.overlayPosition, visibleArea(monitor));
+      anchor.current = restored.anchor; changeDock(restored.dock);
+      await position(monitor, restored.anchor, restored.dock);
+    };
+    void restore().catch(reportUiError);
+    // Re-clamp on taskbar, DPI or display changes, including removal of the saved screen.
+    const timer = setInterval(() => { void restore().catch(reportUiError); }, 2000);
+    return () => { disposed = true; clearInterval(timer); };
   }, [placementKey, !!settings]);
 
+  const nativeLength = useRef(length);
   useEffect(() => {
-    if (anchor.current && monitorRef.current) void position(monitorRef.current, anchor.current).catch(reportUiError);
-  }, [actualWidth, actualHeight]);
+    const apply = () => {
+      nativeLength.current = length;
+      if (!dragging.current && anchor.current && monitorRef.current) void position(monitorRef.current, anchor.current).catch(reportUiError);
+    };
+    // SwiftUI lets the pill finish shrinking before shrinking its NSPanel (320 ms).
+    if (length < nativeLength.current && !companion) {
+      const timer = setTimeout(apply, 320);
+      return () => clearTimeout(timer);
+    }
+    apply();
+  }, [length, companion?.width, companion?.height, dock]);
   useEffect(() => () => cleanupDrag.current(), []);
 
-  const onMouseDown = (event: React.MouseEvent) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest("button, input, a")) return;
-    cleanupDrag.current();
+  const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || dragging.current) return;
+    cleanupDrag.current(); suppressClick.current = false;
+    const element = event.currentTarget, pointerId = event.pointerId;
     const start = { x: event.screenX, y: event.screenY };
-    const cleanup = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", cleanup); };
-    const move = (e: MouseEvent) => {
-      if (Math.hypot(e.screenX - start.x, e.screenY - start.y) < 4) return;
-      cleanup();
-      void (async () => {
-        await getCurrentWindow().startDragging();
-        const monitor = await currentMonitor();
-        if (!monitor) throw new Error("Could not find the Flowbar display.");
-        const topLeft = await getCurrentWindow().outerPosition();
+    const initialAnchor = anchor.current, initialMonitor = monitorRef.current;
+    if (!initialAnchor || !initialMonitor) return;
+    let ended = false, moved = false, cancelled = false;
+    let pending = Promise.resolve();
+    const origin = cursorPosition().catch(error => {
+      reportUiError(error);
+      return new PhysicalPosition(initialAnchor.x * initialMonitor.scaleFactor, initialAnchor.y * initialMonitor.scaleFactor);
+    });
+    const move = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId || ended) return;
+      if (!moved && Math.hypot(e.screenX - start.x, e.screenY - start.y) < 3) return;
+      if (!moved) {
+        moved = true; dragging.current = true; suppressClick.current = true;
+        element.setPointerCapture(pointerId);
+      }
+      const sample = cursorPosition().catch(error => { reportUiError(error); return null; });
+      pending = pending.then(async () => {
+        if (cancelled) return;
+        const [cursor, first, monitors] = await Promise.all([sample, origin, availableMonitors()]);
+        if (cancelled || !cursor) return;
+        const monitor = displayAt(monitors, cursor) ?? monitorRef.current ?? initialMonitor;
         const scale = monitor.scaleFactor;
-        const point = { x: topLeft.x / scale + pillCenter.x, y: topLeft.y / scale + pillCenter.y };
-        const visible = visibleArea(monitor), nextDock = detectDock(point, visible);
-        const snapped = snapPoint(point, visible, nextDock);
-        anchor.current = snapped; monitorRef.current = monitor; setDock(nextDock);
+        const point = draggedAnchor(initialAnchor, first, initialMonitor.scaleFactor, cursor, scale);
+        const nextDock = detectDock({ x: cursor.x / scale, y: cursor.y / scale }, visibleArea(monitor));
+        anchor.current = point; monitorRef.current = monitor; changeDock(nextDock);
+        await position(monitor, point, nextDock);
+      }).catch(reportUiError);
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", finish); window.removeEventListener("pointercancel", finish);
+      if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+    };
+    const finish = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      ended = true; cleanup();
+      void pending.then(async () => {
+        if (cancelled || !moved || !anchor.current || !monitorRef.current) return;
+        const monitor = monitorRef.current, visible = visibleArea(monitor), nextDock = dockRef.current;
+        const snapped = snapPoint(anchor.current, visible, nextDock);
+        anchor.current = snapped;
         await position(monitor, snapped);
         await sendIntent({ action: "placement", placement: { screen: monitor.name ?? undefined,
           x: (snapped.x - visible.x) / visible.width, y: (snapped.y - visible.y) / visible.height, edge: nextDock === "none" ? null : nextDock } });
-      })().catch(reportUiError);
+      }).catch(reportUiError).finally(() => { dragging.current = false; });
     };
-    window.addEventListener("mousemove", move); window.addEventListener("mouseup", cleanup);
-    cleanupDrag.current = cleanup;
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", finish); window.addEventListener("pointercancel", finish);
+    cleanupDrag.current = () => { cancelled = true; ended = true; dragging.current = false; cleanup(); };
   };
-  return { dock, pillCenter, onMouseDown, width: actualWidth, height: actualHeight };
+  const onClickCapture = (event: React.MouseEvent) => {
+    if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; }
+  };
+  const placeCompanionWindow = async (win: Window) => {
+    const monitor = monitorRef.current, point = anchor.current;
+    if (!monitor || !point) return;
+    const size = (await win.outerSize()).toLogical(await win.scaleFactor());
+    const visible = visibleArea(monitor), scale = monitor.scaleFactor;
+    const fitted = { width: Math.min(size.width, visible.width - 12), height: Math.min(size.height, visible.height - 12) };
+    const origin = companionOrigin(point, dockRef.current, fitted, 4, visible);
+    await win.setPosition(new PhysicalPosition(Math.round(origin.x * scale), Math.round(origin.y * scale)));
+    await win.setSize(new PhysicalSize(Math.round(fitted.width * scale), Math.round(fitted.height * scale)));
+  };
+  return { dock, ...frame, onPointerDown, onClickCapture, placeCompanionWindow };
 }
