@@ -6,6 +6,7 @@ import type { CalendarPrompt } from "./core/calendarPolicy";
 import { pasteLastText } from "./core/dailyNotes";
 import { shortcutActions, ShortcutInterpreter, shortcutTitles, type ShortcutAction, validateBindings } from "./core/shortcuts";
 import { DictationController, type DictationJob, type DictationPhase } from "./dictation";
+import { CaptureSounds } from "./captureSounds";
 import { cleanupInstructions } from "./defaults";
 import { ListenerScope } from "./listeners";
 import { native } from "./native";
@@ -36,6 +37,8 @@ export class MainController {
   private recovery = new DictationRecovery();
   private ready = false;
   private meetingTransition = false;
+  private sounds = new CaptureSounds();
+  private cuedMeeting: string | null = null;
   private busyUpdate: Promise<unknown> = Promise.resolve();
   private settingsWrites: Promise<unknown> = Promise.resolve();
   private notesRefresh = 0;
@@ -45,6 +48,7 @@ export class MainController {
     sourceApp: native.foregroundApp,
     cancelProcessing: native.cancelDictationWork,
     success: message => this.confirm(message),
+    cue: cue => { if (this.state.settings.interactionSounds) this.sounds.play(cue); },
     start: async device => { await this.busyUpdate; return native.startRecording(device); },
     stop: native.stopRecording,
     // Native builds the complete provider hints from the persisted profile.
@@ -95,6 +99,12 @@ export class MainController {
     phase: this.state.phase, settings: this.state.settings, activeMeeting: this.activeMeeting,
     processingMeeting: this.meetingTransition || this.state.meetings.some(m => m.status === "transcribing" || m.status === "summarizing"), notice: this.state.notice
   } satisfies WorkspaceStatus);
+  /** As on macOS, a meeting plays the start cue once when it begins recording, not on resume. */
+  private cueMeeting(record: MeetingRecord) {
+    if (record.status !== "recording" || record.id === this.cuedMeeting) return;
+    this.cuedMeeting = record.id;
+    if (this.state.settings.interactionSounds) this.sounds.play("start");
+  }
   error = (error: unknown) => { this.patch({ notice: String(error) }); };
   clearNotice = () => this.patch({ notice: null });
   closeNoticeDetails = () => this.patch({ noticeDetails: false });
@@ -106,6 +116,7 @@ export class MainController {
   private async initializeOnce() {
     const add = (promise: Promise<() => void>) => this.scope.add(promise, this.error);
     add(api.parityEvents.onMeetingChanged(record => {
+      this.cueMeeting(record);
       this.patch({ meetings: [record, ...this.state.meetings.filter(m => m.id !== record.id)] });
       void this.refreshNotes().catch(this.error);
     }));
@@ -162,7 +173,11 @@ export class MainController {
     // Load all durable state before capture actions become available.
     const results = await Promise.allSettled([
       api.loadProfile().then(profile => this.patch({ settings: normalizeSettings(profile.settings), notes: profile.notes, storageError: profile.storageError ?? null })),
-      api.listMeetings().then(meetings => this.patch({ meetings })),
+      api.listMeetings().then(meetings => {
+        // A meeting already recording at launch has had its cue.
+        this.cuedMeeting ??= meetings.find(record => record.status === "recording" || record.status === "paused")?.id ?? null;
+        this.patch({ meetings });
+      }),
       native.listInputs().then(inputs => this.patch({ inputs })),
       this.recovery.load().then(recoveries => { this.dictation.jobs = recoveries; this.patch({ recoveries }); })
     ]);
@@ -252,6 +267,7 @@ export class MainController {
             const record = await api.startMeeting({ title: `Meeting ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
               microphone: settings.meetingMicrophone, systemAudio: settings.meetingSystemAudio,
               summarizeOnStop: settings.meetingSummarize, liveTranscription: settings.meetingLiveTranscription });
+            this.cueMeeting(record);
             this.patch({ meetings: [record, ...this.state.meetings.filter(m => m.id !== record.id)], navigation: { section: "meetings", meetingId: record.id } });
           }
           await this.refreshMeetings();

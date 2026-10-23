@@ -20,6 +20,15 @@ function fixture(patch: Partial<DictationDependencies> = {}) {
   return { controller: new DictationController(deps), deps, events };
 }
 describe("authoritative dictation lifecycle", () => {
+  it("plays the start cue once recording and the stop cue only for a kept recording", async () => {
+    const cues: string[] = [];
+    const f = fixture({ cue: cue => { cues.push(cue); f.events.push(`cue:${cue}`); } });
+    await f.controller.start(); await f.controller.finish();
+    expect(f.events.slice(0, 4)).toEqual(["start", "cue:start", "stop", "cue:stop"]);
+    cues.length = 0;
+    await f.controller.start(); await f.controller.finish(true);
+    expect(cues).toEqual(["start"]);
+  });
   it("cancels processing without saving a late response or deleting an older recovery", async () => {
     let resolve!: (text: string) => void;
     const pending = new Promise<string>(r => { resolve = r; });

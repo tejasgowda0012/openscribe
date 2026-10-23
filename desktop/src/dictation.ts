@@ -17,6 +17,8 @@ export interface DictationDependencies {
   sourceApp?(): Promise<{ name: string; id: string } | null>;
   cancelProcessing?(): Promise<void>;
   success?(message: string): void;
+  /** Played as on macOS: when the microphone is live, and when a kept recording stops. */
+  cue?(cue: "start" | "stop"): void;
 }
 
 /** The main window owns capture; other windows send intents to this controller. */
@@ -38,6 +40,7 @@ export class DictationController {
       this.source = this.deps.sourceApp ? await this.deps.sourceApp().catch(() => null) : null;
       await this.deps.start(this.deps.settings().microphoneDeviceUID || undefined);
       this.phase = "recording"; this.changed();
+      this.deps.cue?.("start");
       if (this.pendingStop) await this.finish(this.pendingCancel);
     } catch (error) { this.phase = "idle"; this.changed(); this.deps.error(error); }
   }
@@ -52,6 +55,7 @@ export class DictationController {
     this.phase = "transcribing"; this.changed();
     try {
       const recording = await this.deps.stop();
+      if (!cancel) this.deps.cue?.("stop");
       if (cancel) { await this.deps.removeAudio(recording.path); this.deps.success?.("Cancelled"); return; }
       const job: DictationJob = { ...recording, id: crypto.randomUUID().toUpperCase(), createdAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), ...(this.source ? { sourceApplication: this.source.name, sourceBundleIdentifier: this.source.id } : {}) };
       this.jobs.push(job);
